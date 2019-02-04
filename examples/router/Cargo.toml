@@ -1,0 +1,29 @@
+[package]
+name = "router"
+version = "0.1.0"
+authors = ["François Dubois <fdubois@devolutions.net>"]
+
+[dependencies]
+rmp = "0.8.7"
+log = "0.4.1"
+env_logger = "0.5.3"
+ctrlc = { version = "3.0", features = ["termination"] }
+tls-api = "0.1.20"
+
+[dependencies.cowrpc]
+path = "../../cowrpc"
+
+[dependencies.cow-ifaces]
+path = "../cow-ifaces"
+
+[[example]]
+name = "client_routed"
+path = "src/client.rs"
+
+[[example]]
+name = "server_routed"
+path = "src/server.rs"
+
+[[example]]
+name = "router_routed"
+path = "src/router.rs"

@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "cowrpc",
+    "cowrpc_derive",
+    "examples/direct",
+    "examples/router"
+]

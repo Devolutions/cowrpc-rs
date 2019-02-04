@@ -1,0 +1,14 @@
+[package]
+name = "cow-ifaces"
+version = "0.1.0"
+authors = ["François Dubois <fdubois@devolutions.net>"]
+
+[dependencies]
+rmp = "0.8.7"
+
+[dependencies.cowrpc]
+path = "../../cowrpc"
+
+[dependencies.cowrpc_derive]
+path = "../../cowrpc_derive"
+

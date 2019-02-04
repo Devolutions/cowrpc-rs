@@ -1,0 +1,33 @@
+[package]
+name = "cowrpc"
+version = "0.3.0"
+license = "MIT/Apache-2.0"
+authors = ["François Dubois <fdubois@devolutions.net>, Richer Archambault <rarchambault@devolutions.net>"]
+
+[dependencies]
+byteorder = "1.2"
+bufstream = "0.1.3"
+rmp = "0.8.7"
+mio = "0.6.13"
+mio-extras = "2.0"
+log = "0.4.1"
+env_logger = "0.5.3"
+bytes = "0.4.4"
+dns-lookup = "0.9.0"
+native-tls = "0.2"
+tungstenite = "0.6"
+timer = "0.2"
+time = "0.1"
+url = "1.7"
+rand = "0.4"
+mouscache = "0.5.2"
+mouscache_derive = "0.4"
+futures = "0.1.25"
+parking_lot = "0.6"
+tokio = "0.1.11"
+tokio-tcp = "0.1.2"
+tls-api = "0.1.20"
+tls-api-native-tls = "0.1.20"
+
+[dev-dependencies]
+cowrpc_derive = {path = "../cowrpc_derive"}
