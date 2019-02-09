@@ -1,10 +1,10 @@
-use error::{CowRpcError, Result};
+use crate::error::{CowRpcError, Result};
 use futures::{Async, AsyncSink, Sink};
-use proto::CowRpcMessage;
+use crate::proto::CowRpcMessage;
 use std::{net::SocketAddr, time::Duration};
-use transport::uri::Uri;
-use transport::{
-    async::{Transport, CowFuture, CowSink, CowStream},
+use crate::transport::uri::Uri;
+use crate::transport::{
+    r#async::{Transport, CowFuture, CowSink, CowStream},
     MessageInterceptor, TransportError
 };
 

@@ -5,9 +5,9 @@ use futures::{future::err, Future, Sink, Stream};
 use tokio::runtime::TaskExecutor;
 
 use super::*;
-use error::CowRpcError;
-use CowRpcMessage;
-use transport::tls::TlsOptions;
+use crate::error::CowRpcError;
+use crate::CowRpcMessage;
+use crate::transport::tls::TlsOptions;
 
 mod tcp;
 mod tcp_listener;
@@ -56,7 +56,7 @@ impl ListenerBuilder {
     }
 
     pub fn from_uri(uri: &str) -> Result<Self> {
-        let uri: Uri = uri.parse().map_err(|parse_error: ::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
+        let uri: Uri = uri.parse().map_err(|parse_error: crate::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
 
         let needs_tls;
 

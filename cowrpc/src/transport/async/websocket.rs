@@ -14,8 +14,8 @@ use tokio::timer::Delay;
 use tokio::util::FutureExt;
 use tls_api::{HandshakeError as TlsHandshakeError, MidHandshakeTlsStream, TlsConnector, TlsConnectorBuilder, TlsStream};
 use tls_api_native_tls::TlsConnector as NativeTlsConnector;
-use transport::{
-    async::{Transport, CowFuture, CowSink, CowStream},
+use crate::transport::{
+    r#async::{Transport, CowFuture, CowSink, CowStream},
     uri::Uri,
     MessageInterceptor, TransportError, tls::TlsOptions,
 };
@@ -30,8 +30,8 @@ use tungstenite::{
 };
 use url::Url;
 
-use error::{CowRpcError, Result};
-use proto::{CowRpcMessage, Message};
+use crate::error::{CowRpcError, Result};
+use crate::proto::{CowRpcMessage, Message};
 
 const PING_INTERVAL: u64 = 120;
 const WS_PING_PAYLOAD: &'static [u8] = b"";
@@ -216,7 +216,7 @@ impl Transport for WebSocketTransport {
         let domain = uri.host().unwrap_or("").to_string();
         let url = match Url::parse(&uri.to_string()) {
             Ok(u) => u,
-            Err(_) => return Box::new(futures::failed(::error::CowRpcError::Internal("Bad server url".into()))),
+            Err(_) => return Box::new(futures::failed(crate::error::CowRpcError::Internal("Bad server url".into()))),
         };
 
         let (mut port, mode) = match uri.scheme() {
@@ -335,7 +335,7 @@ impl CowMessageStream {
             }
 
             let expired_clone = ping_utils.ping_expired.clone();
-            let mut stream_clone = self.stream.clone();
+            let stream_clone = self.stream.clone();
             let mut expired_guard = ping_utils.ping_expired.lock();
             if *expired_guard {
                 let task = task::current();
@@ -443,7 +443,7 @@ impl Stream for CowMessageStream {
                         }
                         continue;
                     }
-                    _ => return Err(::error::CowRpcError::Proto("Received malformed data on socket".into())),
+                    _ => return Err(crate::error::CowRpcError::Proto("Received malformed data on socket".into())),
                 },
                 Err(::tungstenite::Error::ConnectionClosed(_)) => {
                     return Err(TransportError::ConnectionReset.into());

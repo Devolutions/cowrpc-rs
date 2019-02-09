@@ -6,7 +6,7 @@ mod interceptor;
 pub mod adaptor;
 
 use super::*;
-use transport::tls::TlsOptions;
+use crate::transport::tls::TlsOptions;
 
 trait Listener {
     type Transport: Transport;
@@ -50,7 +50,7 @@ impl ListenerBuilder {
     }
 
     pub fn from_uri(uri: &str) -> Result<Self> {
-        let uri: Uri = uri.parse().map_err(|parse_error: ::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
+        let uri: Uri = uri.parse().map_err(|parse_error: crate::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
 
         let needs_tls;
 

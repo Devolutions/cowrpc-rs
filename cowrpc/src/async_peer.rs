@@ -1,6 +1,6 @@
 use super::*;
-use error::CowRpcError;
-use error::CowRpcErrorCode;
+use crate::error::CowRpcError;
+use crate::error::CowRpcErrorCode;
 use futures::{
     future::join_all,
     future::{err, ok},
@@ -8,8 +8,8 @@ use futures::{
     Async, AsyncSink, Future, Sink, Stream,
 };
 use parking_lot::{Mutex, RwLock};
-use proto::*;
-use proto::{CowRpcIfaceDef, Message};
+use crate::proto::*;
+use crate::proto::{CowRpcIfaceDef, Message};
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::{
@@ -20,8 +20,8 @@ use std::time::Duration;
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
 use tokio::runtime::TaskExecutor;
-use transport::{
-    async::{CowRpcTransport, Transport, CowFuture, CowSink, CowStream},
+use crate::transport::{
+    r#async::{CowRpcTransport, Transport, CowFuture, CowSink, CowStream},
     Uri,
 };
 
@@ -517,7 +517,7 @@ impl CowRpcPeerAsyncMsgProcessor {
         for msg_iface in msg.ifaces {
             // Clone the iface_def to update the flags
             let mut iface_def = msg_iface.clone();
-            let mut flag_result;
+            let flag_result;
 
             let self_clone = self.clone();
 
@@ -645,7 +645,7 @@ impl CowRpcPeerAsyncMsgProcessor {
 
         match iface {
             Some(iface) => {
-                let mut iface = iface.read();
+                let iface = iface.read();
                 if let Some(procedure) = iface.get_proc(msg.proc_id, false) {
                     match &iface.server {
                         Some(ref server) => {

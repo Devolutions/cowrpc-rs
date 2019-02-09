@@ -1,11 +1,11 @@
-use error::Result;
+use crate::error::Result;
 use mio::net::TcpListener as MioTcpListener;
 use mio::{Evented, Poll, PollOpt, Ready, Token};
 use std;
 use std::net::SocketAddr;
-use transport::sync::tcp::TcpTransport;
-use transport::{sync::Listener, MessageInterceptor, TransportError};
-use transport::tls::TlsOptions;
+use crate::transport::sync::tcp::TcpTransport;
+use crate::transport::{sync::Listener, MessageInterceptor, TransportError};
+use crate::transport::tls::TlsOptions;
 
 pub struct TcpListener {
     listener: MioTcpListener,

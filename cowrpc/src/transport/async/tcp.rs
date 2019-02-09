@@ -1,15 +1,15 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use error::CowRpcError;
+use crate::error::CowRpcError;
 use futures::{self, Async, AsyncSink, Future, Sink, Stream};
-use proto::{CowRpcMessage, Message};
+use crate::proto::{CowRpcMessage, Message};
 use std::{
     io::{ErrorKind, Read, Write},
     net::SocketAddr,
     time::{Duration, Instant},
 };
 use tokio::net::TcpStream;
-use transport::{
-    async::{Transport, CowFuture, CowSink, CowStream},
+use crate::transport::{
+    r#async::{Transport, CowFuture, CowSink, CowStream},
     uri::Uri,
     MessageInterceptor, TransportError,
 };

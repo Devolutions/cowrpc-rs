@@ -1,14 +1,14 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use error::Result;
+use crate::error::Result;
 use mio::net::TcpStream;
 use mio::{Evented, Poll, PollOpt, Ready, Token};
-use proto::{CowRpcMessage, Message};
+use crate::proto::{CowRpcMessage, Message};
 use std;
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::net::SocketAddr;
-use transport::uri::Uri;
-use transport::{MessageInterceptor, sync::Transport, TransportError};
+use crate::transport::uri::Uri;
+use crate::transport::{MessageInterceptor, sync::Transport, TransportError};
 
 pub struct TcpTransport {
     pub stream: TcpStream,

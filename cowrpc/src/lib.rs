@@ -1,27 +1,5 @@
-extern crate bufstream;
-extern crate byteorder;
-extern crate bytes;
-extern crate dns_lookup;
-extern crate mio;
-extern crate mio_extras;
-extern crate rmp;
-extern crate url;
 #[macro_use]
 extern crate log;
-extern crate env_logger;
-extern crate mouscache;
-extern crate rand;
-#[macro_use]
-extern crate mouscache_derive;
-extern crate futures;
-extern crate parking_lot;
-extern crate time;
-extern crate timer;
-extern crate tls_api;
-extern crate tls_api_native_tls;
-extern crate tokio;
-extern crate tokio_tcp;
-extern crate tungstenite;
 
 use std::io::prelude::*;
 use std::ops::Deref;
@@ -35,18 +13,18 @@ use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::Sender;
 use parking_lot::{Mutex, RwLock};
 
-pub use transport::async::CowFuture;
-pub use transport::tls::{TlsOptions, TlsOptionsBuilder};
-pub use proto::CowRpcMessage;
-pub use proto::Message;
-pub use transport::CowRpcMessageInterceptor;
-pub use transport::MessageInjector as CowRpcMessageInjector;
+pub use crate::transport::r#async::CowFuture;
+pub use crate::transport::tls::{TlsOptions, TlsOptionsBuilder};
+pub use crate::proto::CowRpcMessage;
+pub use crate::proto::Message;
+pub use crate::transport::CowRpcMessageInterceptor;
+pub use crate::transport::MessageInjector as CowRpcMessageInjector;
 
-use error::{CowRpcError, CowRpcErrorCode, Result};
-use peer::*;
-use proto::*;
-use transport::sync::{CowRpcListener, CowRpcTransport};
-use cancel_event::CancelEventHandle;
+use crate::error::{CowRpcError, CowRpcErrorCode, Result};
+use crate::peer::*;
+use crate::proto::*;
+use crate::transport::sync::{CowRpcListener, CowRpcTransport};
+use crate::cancel_event::CancelEventHandle;
 
 pub mod async_peer;
 pub mod async_router;
@@ -810,7 +788,7 @@ pub enum CowRpcIdentityType {
 
 impl std::string::ToString for CowRpcIdentityType {
     fn to_string(&self) -> String {
-        use CowRpcIdentityType::*;
+        use crate::CowRpcIdentityType::*;
 
         match *self {
             NONE => "NONE".to_string(),
@@ -824,7 +802,7 @@ impl std::str::FromStr for CowRpcIdentityType {
     type Err = CowRpcError;
 
     fn from_str(s: &str) -> Result<Self> {
-        use CowRpcIdentityType::*;
+        use crate::CowRpcIdentityType::*;
 
         Ok(match s {
             "UPN" => UPN,

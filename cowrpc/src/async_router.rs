@@ -1,5 +1,5 @@
 use super::{CowRpcIdentityType, CowRpcMessage};
-use error::{CowRpcError, CowRpcErrorCode, Result};
+use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use futures::{
     future::ok,
     sync::oneshot::{channel, Receiver, Sender},
@@ -9,20 +9,20 @@ use mouscache;
 use mouscache::Cache;
 use mouscache::CacheFunc;
 use parking_lot::{Mutex, RwLock};
-use proto;
-use proto::*;
+use crate::proto;
+use crate::proto::*;
 use rand;
-use router::CowRpcIdentity;
+use crate::router::CowRpcIdentity;
 use std;
 use std::{collections::HashMap, fmt, sync::Arc};
 use tokio::prelude::*;
 use tokio::util::FutureExt;
-use transport::{
-    async::{ListenerBuilder, CowRpcTransport, Transport, CowSink, CowStream, adaptor::Adaptor},
+use crate::transport::{
+    r#async::{ListenerBuilder, CowRpcTransport, Transport, CowSink, CowStream, adaptor::Adaptor},
     MessageInterceptor,
     tls::TlsOptions,
 };
-use CowRpcMessageInterceptor;
+use crate::CowRpcMessageInterceptor;
 
 pub type RouterMonitor = Receiver<()>;
 
@@ -339,7 +339,7 @@ impl RouterShared {
                                 } else {
                                     client_id
                                 };
-                                if let Some(mut remote_ref) = peers.get_mut(&remote_id) {
+                                if let Some(remote_ref) = peers.get_mut(&remote_id) {
                                     remote_ref.send_unbind_req(client_id, server_id, iface_id);
                                     {
                                         let _ = remote_ref.inner.writer_sink.lock().poll_complete();

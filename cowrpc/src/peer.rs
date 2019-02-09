@@ -11,11 +11,11 @@ use mio_extras::channel::channel;
 use mio_extras::channel::{Receiver, Sender};
 use mio_extras::timer::Timer;
 
-use cancel_event::{CancelEvent, CancelEventHandle};
-use error::CowRpcError;
-use error::CowRpcErrorCode;
-use proto::Message;
-use proto::*;
+use crate::cancel_event::{CancelEvent, CancelEventHandle};
+use crate::error::CowRpcError;
+use crate::error::CowRpcErrorCode;
+use crate::proto::Message;
+use crate::proto::*;
 
 static COWRPC_REQ_ID_GENERATOR: AtomicUsize = atomic::ATOMIC_USIZE_INIT;
 
@@ -931,7 +931,7 @@ impl CowRpcPeer {
         for msg_iface in msg.ifaces {
             // Clone the iface_def to update the flags
             let mut iface_def = msg_iface.clone();
-            let mut flag_result;
+            let flag_result;
 
             // Try to get the iface with the iface_id
             let iface = self.rpc.get_iface(msg_iface.id, false);
@@ -1039,7 +1039,7 @@ impl CowRpcPeer {
 
         match iface {
             Some(iface) => {
-                let mut iface = iface.read();
+                let iface = iface.read();
                 let procedure = iface.get_proc(msg.proc_id, false).unwrap();
                 match &iface.server {
                     Some(ref server) => {

@@ -5,15 +5,15 @@ use std::net::SocketAddr;
 
 use mio::{Evented, Poll, PollOpt, Ready, Token};
 
-use error::{CowRpcError, Result};
-use proto::CowRpcMessage;
+use crate::error::{CowRpcError, Result};
+use crate::proto::CowRpcMessage;
 
-pub mod async;
+pub mod r#async;
 pub mod sync;
 mod uri;
 pub mod tls;
 
-pub use transport::uri::{Uri, UriError};
+pub use crate::transport::uri::{Uri, UriError};
 
 pub enum SupportedProto {
     Tcp,

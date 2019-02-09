@@ -7,7 +7,7 @@ const ATTRIBUTE_NAME: &'static str = "cowrpc";
 const ASYNC_ATTRIBUTE_NAME: &'static str = "async";
 
 pub struct DataAttribute {
-    pub async: bool,
+    pub r#async: bool,
 }
 
 pub fn get_meta_items(attr: &syn::Attribute) -> Option<Vec<syn::NestedMeta>> {
@@ -22,12 +22,12 @@ pub fn get_meta_items(attr: &syn::Attribute) -> Option<Vec<syn::NestedMeta>> {
 }
 
 pub fn validate_data_attributes(attrs: &Vec<Attribute>) -> Result<DataAttribute, String> {
-    let mut attribs = DataAttribute { async: false };
+    let mut attribs = DataAttribute { r#async: false };
 
     for meta_items in attrs.iter().filter_map(get_meta_items) {
         for meta in meta_items {
             match meta {
-                Meta(Word(name)) if name == ASYNC_ATTRIBUTE_NAME => attribs.async = true,
+                Meta(Word(name)) if name == ASYNC_ATTRIBUTE_NAME => attribs.r#async = true,
                 Meta(NameValue(_)) => {
                     return Err("There is no named value attribute you can use on data types with cowrpc".to_string())
                 }

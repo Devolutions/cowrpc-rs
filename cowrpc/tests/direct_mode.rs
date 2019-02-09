@@ -1,7 +1,5 @@
-extern crate cowrpc;
 #[macro_use]
 extern crate cowrpc_derive;
-extern crate rmp;
 
 use std::process::exit;
 use std::sync::Arc;
@@ -11,9 +9,9 @@ use std::time::Duration;
 use cowrpc::peer::CowRpcPeer;
 use cowrpc::*;
 
-use ifaces::test_cow;
-use ifaces::test_cow::*;
-use ready_event::ReadyEvent;
+use crate::ifaces::test_cow;
+use crate::ifaces::test_cow::*;
+use crate::ready_event::ReadyEvent;
 
 mod ifaces;
 mod ready_event;
