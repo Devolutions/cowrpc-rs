@@ -331,23 +331,29 @@ impl CowMessageStream {
     fn check_ping(&mut self) -> Result<()> {
         if let Some(ref mut ping_utils) = self.ping_utils {
             if ping_utils.ping_sent >= 4 {
-                return Err(TransportError::ConnectionReset.into());
+                warn!("WS_PING sent {} times and no response received.", ping_utils.ping_sent);
             }
 
-            let expired_clone = ping_utils.ping_expired.clone();
-            let mut stream_clone = self.stream.clone();
             let mut expired_guard = ping_utils.ping_expired.lock();
             if *expired_guard {
+                let expired_clone = ping_utils.ping_expired.clone();
+                let mut stream_clone = self.stream.clone();
+
                 let task = task::current();
                 let timeout = Delay::new(Instant::now() + Duration::from_secs(PING_INTERVAL));
+
                 ping_utils.executor_handle.spawn(timeout.then(move |_| {
                     *expired_clone.lock() = true;
-                    let _ = stream_clone
+                    if let Err(e) = stream_clone
                         .lock()
-                        .write_message(WebSocketMessage::Ping(WS_PING_PAYLOAD.to_vec()));
+                        .write_message(WebSocketMessage::Ping(WS_PING_PAYLOAD.to_vec())) {
+
+                        error!("WS_PING can't be sent: {}", e);
+                    }
                     task.notify();
                     futures::finished::<(), ()>(())
                 }));
+
                 *expired_guard = false;
                 ping_utils.ping_sent += 1;
             }
@@ -445,11 +451,8 @@ impl Stream for CowMessageStream {
                     }
                     _ => return Err(::error::CowRpcError::Proto("Received malformed data on socket".into())),
                 },
-                Err(::tungstenite::Error::ConnectionClosed(_)) => {
-                    return Err(TransportError::ConnectionReset.into());
-                }
-                e => {
-                    trace!("ERROR Connection error {:?}", e);
+                Err(e) => {
+                    error!("ws.read_message returned error: {}", e);
                     return Err(TransportError::ConnectionReset.into());
                 }
             }
