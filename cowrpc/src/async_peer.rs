@@ -28,7 +28,7 @@ use transport::{
 type HandleMonitor = Arc<Mutex<Option<PeerHandle>>>;
 type HandleMsgProcessor = Arc<RwLock<Option<CowRpcPeerAsyncMsgProcessor>>>;
 type HandleThreadHandle = Arc<Mutex<Option<std::thread::JoinHandle<Result<()>>>>>;
-type HttpMsgCallback = Fn(&mut [u8]) -> CallFuture<Vec<u8>> + Send + Sync;
+type HttpMsgCallback = Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>> + Send + Sync;
 type UnbindCallback = Fn(Arc<CowRpcAsyncBindContext>) + Send + Sync;
 pub type PeerMonitor = Receiver<()>;
 
@@ -383,7 +383,7 @@ impl CowRpcPeerAsyncMsgProcessor {
 
     fn process_http_req(&self, header: CowRpcHdr, msg: CowRpcHttpMsg, payload: &mut [u8]) -> CowFuture<()> {
         let res_fut = if let Some(ref cb) = *self.inner.on_http_msg_callback {
-            (**cb)(payload)
+            (**cb)(CowRpcCallContext::new(header.src_id), payload)
         } else {
             Box::new(future::ok::<Vec<u8>, ()>(b"HTTP/1.1 501 Not Implemented\r\n\r\n".to_vec())) as CallFuture<Vec<u8>>
         };
@@ -612,9 +612,14 @@ impl CowRpcPeerAsyncMsgProcessor {
             if iface.is_some() {
                 let fut: CowFuture<()> = Box::new(
                     self.remove_bind_context(from_client, header.src_id, msg_iface.id)
-                        .and_then(move |removed| {
-                            if removed {
+                        .and_then(move |bind_context_removed_opt| {
+                            if let Some(bind_context_removed) = bind_context_removed_opt {
                                 flag_result = CowRpcErrorCode::Success;
+
+                                let clone = self_clone.clone();
+                                if let Some(ref callback) = *clone.inner.on_unbind_callback {
+                                    callback(bind_context_removed);
+                                }
                             } else {
                                 iface_def.flags = CowRpcErrorCode::NotBound.into();
                                 flag_result = CowRpcErrorCode::NotBound;
@@ -864,7 +869,7 @@ impl CowRpcPeerAsyncMsgProcessor {
         self.send_message(CowRpcMessage::Terminate(header))
     }
 
-    fn remove_bind_context(&self, is_server: bool, remote_id: u32, iface_rid: u16) -> CowFuture<bool> {
+    fn remove_bind_context(&self, is_server: bool, remote_id: u32, iface_rid: u16) -> CowFuture<Option<Arc<CowRpcAsyncBindContext>>> {
         let mut bind_contexts= self.inner.bind_contexts.write();
         let bind_context_removed = bind_contexts
             .iter()
@@ -873,10 +878,9 @@ impl CowRpcPeerAsyncMsgProcessor {
                     && (bind_context.remote_id == remote_id)
                     && bind_context.iface.get_remote_id() == iface_rid
             })
-            .map(|position| bind_contexts.remove(position))
-            .is_some();
+            .map(|position| bind_contexts.remove(position));
 
-        Box::new(ok::<bool, CowRpcError>(bind_context_removed))
+        Box::new(ok::<Option<Arc<CowRpcAsyncBindContext>>, CowRpcError>(bind_context_removed))
     }
 
     fn send_identify_req(&self, name: &str, typ: CowRpcIdentityType) -> CowFuture<()> {
@@ -1663,7 +1667,7 @@ impl CowRpcPeer {
         self.on_unbind_callback = Some(Box::new(callback));
     }
 
-    pub fn on_http_msg_callback<F: 'static + Send + Sync +  Fn(&mut [u8]) -> CallFuture<Vec<u8>>>(&mut self, callback: F) {
+    pub fn on_http_msg_callback<F: 'static + Send + Sync +  Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>>>(&mut self, callback: F) {
         self.on_http_msg_callback = Some(Box::new(callback));
     }
 }
@@ -2123,8 +2127,8 @@ impl CowRpcPeerHandle {
                                             let fut: CowFuture<T> = Box::new(
                                                 processor_clone
                                                     .remove_bind_context(false, remote_id, iface_rid)
-                                                    .and_then(move |removed| {
-                                                        if !removed {
+                                                    .and_then(move |bind_context_removed| {
+                                                        if bind_context_removed.is_none() {
                                                             warn!(
                                                                 "Unable to remove bind context remote {}  iface {}",
                                                                 remote_id, iface_rid
