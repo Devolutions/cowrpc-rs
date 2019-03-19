@@ -33,7 +33,7 @@ use url::Url;
 use error::{CowRpcError, Result};
 use proto::{CowRpcMessage, Message};
 
-const PING_INTERVAL: u64 = 120;
+const PING_INTERVAL: u64 = 30;
 const WS_PING_PAYLOAD: &'static [u8] = b"";
 const WS_BIN_CHUNK_SIZE: usize = 4096;
 
@@ -330,8 +330,9 @@ pub struct CowMessageStream {
 impl CowMessageStream {
     fn check_ping(&mut self) -> Result<()> {
         if let Some(ref mut ping_utils) = self.ping_utils {
-            if ping_utils.ping_sent >= 4 {
+            if ping_utils.ping_sent >= 3 {
                 warn!("WS_PING sent {} times and no response received.", ping_utils.ping_sent);
+                return Err(TransportError::ConnectionReset.into());
             }
 
             let mut expired_guard = ping_utils.ping_expired.lock();
