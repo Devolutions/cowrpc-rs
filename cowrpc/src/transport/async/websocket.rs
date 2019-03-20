@@ -33,7 +33,8 @@ use url::Url;
 use error::{CowRpcError, Result};
 use proto::{CowRpcMessage, Message};
 
-const PING_INTERVAL: u64 = 30;
+const MISSED_PING_MULTIPLIER: u64 = 2;
+const PING_INTERVAL: u64 = 60;
 const WS_PING_PAYLOAD: &'static [u8] = b"";
 const WS_BIN_CHUNK_SIZE: usize = 4096;
 
@@ -332,7 +333,6 @@ impl CowMessageStream {
         if let Some(ref mut ping_utils) = self.ping_utils {
             if ping_utils.ping_sent >= 3 {
                 warn!("WS_PING sent {} times and no response received.", ping_utils.ping_sent);
-                return Err(TransportError::ConnectionReset.into());
             }
 
             let mut expired_guard = ping_utils.ping_expired.lock();
@@ -341,7 +341,7 @@ impl CowMessageStream {
                 let mut stream_clone = self.stream.clone();
 
                 let task = task::current();
-                let timeout = Delay::new(Instant::now() + Duration::from_secs(PING_INTERVAL));
+                let timeout = Delay::new(Instant::now() + Duration::from_secs(PING_INTERVAL * (MISSED_PING_MULTIPLIER.pow(ping_utils.ping_sent as u32))));
 
                 ping_utils.executor_handle.spawn(timeout.then(move |_| {
                     *expired_clone.lock() = true;
