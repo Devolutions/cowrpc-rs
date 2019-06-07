@@ -130,6 +130,9 @@ impl CowRpcPeer {
         timeout: Option<Duration>,
         cancel_handle: Option<&CancelEventHandle>,
     ) -> Result<()> {
+        // Allow a short time to be sure the socket is connected
+        thread::sleep(Duration::from_millis(500));
+
         self.send_handshake_req()?;
         self.transition_to_state(CowRpcState::HANDSHAKE);
         self.run_to_state(CowRpcState::ACTIVE, timeout, cancel_handle)?;
