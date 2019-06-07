@@ -464,17 +464,17 @@ pub struct CowRpcVerifyReq {
 }
 
 pub struct CowRpcVerifyRsp {
-    error: CowRpcErrorCode,
+    _error: CowRpcErrorCode,
     pub payload: Vec<u8>,
 }
 
 impl CowRpcVerifyRsp {
-    fn is_success(&self) -> bool {
-        self.error == CowRpcErrorCode::Success
+    fn _is_success(&self) -> bool {
+        self._error == CowRpcErrorCode::Success
     }
 
-    fn get_error(&self) -> CowRpcErrorCode {
-        self.error.clone()
+    fn _get_error(&self) -> CowRpcErrorCode {
+        self._error.clone()
     }
 }
 
@@ -485,17 +485,17 @@ pub struct CowRpcHttpReq {
 }
 
 pub struct CowRpcHttpRsp {
-    error: CowRpcErrorCode,
+    _error: CowRpcErrorCode,
     pub http_rsp: Vec<u8>,
 }
 
 impl CowRpcHttpRsp {
-    fn is_success(&self) -> bool {
-        self.error == CowRpcErrorCode::Success
+    fn _is_success(&self) -> bool {
+        self._error == CowRpcErrorCode::Success
     }
 
-    fn get_error(&self) -> CowRpcErrorCode {
-        self.error.clone()
+    fn _get_error(&self) -> CowRpcErrorCode {
+        self._error.clone()
     }
 }
 
@@ -654,17 +654,17 @@ pub struct CowRpcAsyncVerifyReq {
 }
 
 pub struct CowRpcAsyncVerifyRsp {
-    error: CowRpcErrorCode,
+    _error: CowRpcErrorCode,
     pub payload: Vec<u8>,
 }
 
 impl CowRpcAsyncVerifyRsp {
-    fn is_success(&self) -> bool {
-        self.error == CowRpcErrorCode::Success
+    fn _is_success(&self) -> bool {
+        self._error == CowRpcErrorCode::Success
     }
 
-    fn get_error(&self) -> CowRpcErrorCode {
-        self.error.clone()
+    fn _get_error(&self) -> CowRpcErrorCode {
+        self._error.clone()
     }
 }
 
@@ -675,17 +675,17 @@ pub struct CowRpcAsyncHttpReq {
 }
 
 pub struct CowRpcAsyncHttpRsp {
-    error: CowRpcErrorCode,
+    _error: CowRpcErrorCode,
     pub http_rsp: Vec<u8>,
 }
 
 impl CowRpcAsyncHttpRsp {
-    fn is_success(&self) -> bool {
-        self.error == CowRpcErrorCode::Success
+    fn _is_success(&self) -> bool {
+        self._error == CowRpcErrorCode::Success
     }
 
-    fn get_error(&self) -> CowRpcErrorCode {
-        self.error.clone()
+    fn _get_error(&self) -> CowRpcErrorCode {
+        self._error.clone()
     }
 }
 

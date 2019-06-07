@@ -42,7 +42,7 @@ impl PeerHandle {
     }
 }
 
-static COWRPC_REQ_ID_GENERATOR: AtomicUsize = atomic::ATOMIC_USIZE_INIT;
+static COWRPC_REQ_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 struct CowRpcPeerSharedInner {
@@ -324,7 +324,7 @@ impl CowRpcPeerAsyncMsgProcessor {
                                 .take()
                                 .expect("Cannot Send twice on request oneshot channel")
                                 .send(CowRpcAsyncVerifyRsp {
-                                    error: CowRpcErrorCode::from(header.flags),
+                                    _error: CowRpcErrorCode::from(header.flags),
                                     payload
                                 }) {
                                 return err(CowRpcError::Internal(
@@ -364,7 +364,7 @@ impl CowRpcPeerAsyncMsgProcessor {
                                 .take()
                                 .expect("Cannot Send twice on request oneshot channel")
                                 .send(CowRpcAsyncHttpRsp {
-                                    error: CowRpcErrorCode::from(header.flags),
+                                    _error: CowRpcErrorCode::from(header.flags),
                                     http_rsp
                                 }) {
                                 return err(CowRpcError::Internal("Unable to send http response through futures oneshot channel".to_string()));
