@@ -17,7 +17,7 @@ use error::CowRpcErrorCode;
 use proto::Message;
 use proto::*;
 
-static COWRPC_REQ_ID_GENERATOR: AtomicUsize = atomic::ATOMIC_USIZE_INIT;
+static COWRPC_REQ_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
 
 const CHANNEL_EVENT: Token = Token(1);
 const TRANSPORT_EVENT: Token = Token(2);
@@ -130,6 +130,9 @@ impl CowRpcPeer {
         timeout: Option<Duration>,
         cancel_handle: Option<&CancelEventHandle>,
     ) -> Result<()> {
+        // Allow a short time to be sure the socket is connected
+        thread::sleep(Duration::from_millis(500));
+
         self.send_handshake_req()?;
         self.transition_to_state(CowRpcState::HANDSHAKE);
         self.run_to_state(CowRpcState::ACTIVE, timeout, cancel_handle)?;
@@ -1103,7 +1106,7 @@ impl CowRpcPeer {
                 CowRpcReq::Verify(ref verify_req) => {
                     if verify_req.call_id == msg.call_id {
                         return verify_req.tx.send(CowRpcVerifyRsp {
-                            error: CowRpcErrorCode::from(header.flags),
+                            _error: CowRpcErrorCode::from(header.flags),
                             payload: payload.to_vec(),
                         }).map_err(|e| CowRpcError::Internal(e.to_string()));
                     }
@@ -1123,7 +1126,7 @@ impl CowRpcPeer {
                 CowRpcReq::Http(ref http_req) => {
                     if http_req.call_id == msg.call_id {
                         return http_req.tx.send(CowRpcHttpRsp {
-                            error: CowRpcErrorCode::from(header.flags),
+                            _error: CowRpcErrorCode::from(header.flags),
                             http_rsp: payload.to_vec(),
                         }).map_err(|e| CowRpcError::Internal(e.to_string()));
                     }
