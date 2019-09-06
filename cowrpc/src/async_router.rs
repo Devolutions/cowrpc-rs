@@ -881,7 +881,7 @@ impl Future for CowRpcRouterPeerHandshake {
                 )),
             },
             Async::Ready(None) => Err(CowRpcError::Proto("Connection was closed before handshake".to_string())),
-            _ => Ok(Async::NotReady),
+            Async::NotReady => Ok(Async::NotReady),
         }
     }
 }
