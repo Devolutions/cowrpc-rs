@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::sync::Arc;
 use super::*;
-use CowRpcMessage;
+use crate::CowRpcMessage;
 
 pub struct AdaptorMutInner {
     messages: VecDeque<CowRpcMessage>,

@@ -17,9 +17,9 @@ use tungstenite::{
     stream::Stream as StreamSwitcher,
 };
 
-use error::{CowRpcError, Result};
-use transport::{
-    async::{Listener, CowFuture, CowStream, websocket::{ServerWebSocketHandshake, TlsHandshake, WebSocketTransport}},
+use crate::error::{CowRpcError, Result};
+use crate::transport::{
+    r#async::{Listener, CowFuture, CowStream, websocket::{ServerWebSocketHandshake, TlsHandshake, WebSocketTransport}},
     MessageInterceptor, TransportError,
     tls::{Identity, TlsOptions, TlsOptionsType},
 };
@@ -55,7 +55,7 @@ fn wrap_stream_async(tls_acceptor: &Option<NativeTlsAcceptor>, stream: TcpStream
 pub struct WebSocketListener {
     listener: TcpTokioListener,
     tls_acceptor: Option<NativeTlsAcceptor>,
-    transport_cb_handler: Option<Box<MessageInterceptor>>,
+    transport_cb_handler: Option<Box<dyn MessageInterceptor>>,
     executor_handle: Option<TaskExecutor>,
 }
 
@@ -155,7 +155,7 @@ impl Listener for WebSocketListener {
 
     }
 
-    fn set_msg_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.transport_cb_handler = Some(cb_handler)
     }
 

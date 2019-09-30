@@ -1,4 +1,4 @@
-use error::Result;
+use crate::error::Result;
 use rmp;
 use std::io::Read;
 

@@ -1,15 +1,15 @@
-use error::{CowRpcError, Result};
+use crate::error::{CowRpcError, Result};
 use futures::{Async, AsyncSink, Sink};
-use proto::CowRpcMessage;
+use crate::proto::CowRpcMessage;
 use std::{net::SocketAddr, time::Duration};
-use transport::uri::Uri;
-use transport::{
-    async::{Transport, CowFuture, CowSink, CowStream},
+use crate::transport::uri::Uri;
+use crate::transport::{
+    r#async::{Transport, CowFuture, CowSink, CowStream},
     MessageInterceptor, TransportError
 };
 
 pub struct InterceptorTransport {
-    pub inter: Box<MessageInterceptor>,
+    pub inter: Box<dyn MessageInterceptor>,
 }
 
 impl Clone for InterceptorTransport {
@@ -38,7 +38,7 @@ impl Transport for InterceptorTransport {
         unreachable!("Cannot call message_stream on the interceptor transport")
     }
 
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.inter = cb_handler;
     }
 
@@ -56,7 +56,7 @@ impl Transport for InterceptorTransport {
 }
 
 struct InterceptorSink {
-    inter: Box<MessageInterceptor>,
+    inter: Box<dyn MessageInterceptor>,
 }
 
 impl Sink for InterceptorSink {

@@ -1,19 +1,19 @@
-use error::CowRpcError;
+use crate::error::CowRpcError;
 use futures::{
     future::ok,
     Stream,
 };
 use std::net::SocketAddr;
 use tokio::net::TcpListener as TcpTokioListener;
-use transport::{
-    async::{Listener, CowFuture, CowStream, tcp::TcpTransport},
+use crate::transport::{
+    r#async::{Listener, CowFuture, CowStream, tcp::TcpTransport},
     MessageInterceptor,
     tls::TlsOptions,
 };
 
 pub struct TcpListener {
     listener: TcpTokioListener,
-    transport_cb_handler: Option<Box<MessageInterceptor>>,
+    transport_cb_handler: Option<Box<dyn MessageInterceptor>>,
 }
 
 impl Listener for TcpListener {
@@ -59,7 +59,7 @@ impl Listener for TcpListener {
         warn!("Tls is not implemented over tcp")
     }
 
-    fn set_msg_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.transport_cb_handler = Some(cb_handler)
     }
 }
