@@ -1,22 +1,22 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use error::CowRpcError;
+use crate::error::CowRpcError;
 use futures::{self, Async, AsyncSink, Future, Sink, Stream};
-use proto::{CowRpcMessage, Message};
+use crate::proto::{CowRpcMessage, Message};
 use std::{
     io::{ErrorKind, Read, Write},
     net::SocketAddr,
     time::{Duration, Instant},
 };
 use tokio::net::TcpStream;
-use transport::{
-    async::{Transport, CowFuture, CowSink, CowStream},
+use crate::transport::{
+    r#async::{Transport, CowFuture, CowSink, CowStream},
     uri::Uri,
     MessageInterceptor, TransportError,
 };
 
 pub struct TcpTransport {
     stream: TcpStream,
-    callback_handler: Option<Box<MessageInterceptor>>,
+    callback_handler: Option<Box<dyn MessageInterceptor>>,
     connected_at: Instant,
 }
 
@@ -36,7 +36,7 @@ impl Clone for TcpTransport {
 }
 
 impl TcpTransport {
-    pub fn new(stream: TcpStream, msg_inter: Option<Box<MessageInterceptor>>) -> Self {
+    pub fn new(stream: TcpStream, msg_inter: Option<Box<dyn MessageInterceptor>>) -> Self {
         TcpTransport {
             stream,
             callback_handler: msg_inter,
@@ -104,7 +104,7 @@ impl Transport for TcpTransport {
         })
     }
 
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.callback_handler = Some(cb_handler)
     }
 
@@ -124,7 +124,7 @@ impl Transport for TcpTransport {
 pub struct CowMessageStream {
     pub stream: TcpStream,
     pub data_received: Vec<u8>,
-    pub callback_handler: Option<Box<MessageInterceptor>>,
+    pub callback_handler: Option<Box<dyn MessageInterceptor>>,
 }
 
 impl Stream for CowMessageStream {
@@ -217,7 +217,7 @@ impl Stream for CowMessageStream {
 pub struct CowMessageSink {
     pub stream: TcpStream,
     pub data_to_send: Vec<u8>,
-    pub callback_handler: Option<Box<MessageInterceptor>>,
+    pub callback_handler: Option<Box<dyn MessageInterceptor>>,
 }
 
 impl Sink for CowMessageSink {

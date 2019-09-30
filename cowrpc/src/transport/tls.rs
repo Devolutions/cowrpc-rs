@@ -1,6 +1,6 @@
 use tls_api::Certificate;
 
-use error::{CowRpcError, Result};
+use crate::error::{CowRpcError, Result};
 
 /// A version the TLS protocol.
 pub enum TlsVersion {

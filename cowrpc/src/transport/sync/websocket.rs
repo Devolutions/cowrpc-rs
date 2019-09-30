@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use byteorder::{LittleEndian, ReadBytesExt};
 use mio::net::TcpStream;
 use mio::{Evented, Events, Poll, PollOpt, Ready, Token};
-use proto::{CowRpcMessage, Message};
+use crate::proto::{CowRpcMessage, Message};
 use time::Duration;
 use timer::{Guard as TimerGuard, Timer};
 use tls_api::{HandshakeError as TlsHandshakeError, MidHandshakeTlsStream, TlsConnector, TlsConnectorBuilder, TlsStream};
@@ -22,9 +22,9 @@ use tungstenite::{
 };
 use url::Url;
 
-use error::Result;
-use transport::uri::Uri;
-use transport::{MessageInterceptor, sync::Transport, tls::TlsOptions, TransportError};
+use crate::error::Result;
+use crate::transport::uri::Uri;
+use crate::transport::{MessageInterceptor, sync::Transport, tls::TlsOptions, TransportError};
 
 const WS_PING_PAYLOAD: &'static [u8] = b"";
 const WS_BIN_CHUNK_SIZE: usize = 4096;
@@ -42,7 +42,7 @@ pub struct WebSocketTransport {
     pub inner: Arc<Mutex<WebSocketInner>>,
     pub data_received: Vec<u8>,
     pub data_to_send: Vec<u8>,
-    pub callback_handler: Option<Box<MessageInterceptor>>,
+    pub callback_handler: Option<Box<dyn MessageInterceptor>>,
     pub connected_at: std::time::Instant,
     #[allow(dead_code)]
     ping_guard: Option<TimerGuard>,
@@ -72,7 +72,7 @@ pub fn wrap_stream(stream: TcpStream, domain: &str, mode: Mode, tls_options: Opt
 
                     for i in 0..5 {
                         poll.poll(&mut events, Some(std::time::Duration::from_millis(1000)))
-                            .map_err(|_| ::error::CowRpcError::from(TransportError::UnableToConnect))?;
+                            .map_err(|_| crate::error::CowRpcError::from(TransportError::UnableToConnect))?;
 
                         match handshake.handshake() {
                             Ok(tls) => {
@@ -191,7 +191,7 @@ impl WebSocketTransport {
         let domain = uri.host().unwrap_or("");
         let url = match Url::parse(&uri.to_string()) {
             Ok(u) => u,
-            Err(_) => return Err(::error::CowRpcError::Internal("Bad server url".into())),
+            Err(_) => return Err(crate::error::CowRpcError::Internal("Bad server url".into())),
         };
 
         let (mut port, mode) = match uri.scheme() {
@@ -240,7 +240,7 @@ impl WebSocketTransport {
 
                     for i in 0..5 {
                         poll.poll(&mut events, Some(std::time::Duration::from_millis(1000)))
-                            .map_err(|_| ::error::CowRpcError::from(TransportError::UnableToConnect))?;
+                            .map_err(|_| crate::error::CowRpcError::from(TransportError::UnableToConnect))?;
 
                         match handshake.handshake() {
                             Ok(res) => {
@@ -284,7 +284,7 @@ impl Transport for WebSocketTransport {
                 if let WebSocketInner::WebSocket(ref mut ws) = *inner {
                     assert_ne!(self.data_to_send.len(), 0);
 
-                    let mut data_to_send = self.data_to_send.clone();
+                    let data_to_send = self.data_to_send.clone();
 
                     if data_to_send.len() < WS_BIN_CHUNK_SIZE {
                         // Send all the data since it fits inside one chunk
@@ -464,7 +464,7 @@ impl Transport for WebSocketTransport {
                                     continue;
                                 }
                                 _ => {
-                                    return Err(::error::CowRpcError::Proto("Received malformed data on socket".into()))
+                                    return Err(crate::error::CowRpcError::Proto("Received malformed data on socket".into()))
                                 }
                             },
                             Err(::tungstenite::Error::ConnectionClosed(_)) => {
@@ -535,7 +535,7 @@ impl Transport for WebSocketTransport {
         Ok(())
     }
 
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.callback_handler = Some(cb_handler)
     }
 

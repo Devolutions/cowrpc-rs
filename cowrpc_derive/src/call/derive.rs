@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use syn;
 use syn::{DeriveInput, Ident};
 
-use call::attr::*;
+use crate::call::attr::*;
 
 const IFACE_NAME_IDENT: u32 = 0;
 const IFACE_CLIENT_IDENT: u32 = 1;
@@ -20,7 +20,7 @@ pub fn impl_cowrpc_call(input: proc_macro::TokenStream) -> Result<Tokens, String
 
     let data_attrs = validate_data_attributes(&input.attrs)?;
 
-    if data_attrs.async {
+    if data_attrs.r#async {
         // Gen Async Proc
         let idents = if let Some(iface_name) = &data_attrs.iface_name {
             get_call_async_idents(&input, iface_name)?

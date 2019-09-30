@@ -1,7 +1,7 @@
-use error::{CowRpcError, Result};
+use crate::error::{CowRpcError, Result};
 use futures::{Async, Stream};
 use parking_lot::Mutex;
-use proto::CowRpcMessage;
+use crate::proto::CowRpcMessage;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::prelude::*;

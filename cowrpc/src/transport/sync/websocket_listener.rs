@@ -13,10 +13,10 @@ use tls_api::HandshakeError as TlsHandshakeError;
 use tls_api_native_tls::TlsAcceptor as NativeTlsAcceptor;
 use tls_api_native_tls::TlsAcceptorBuilder as NativeTlsAcceptorBuilder;
 
-use error::Result;
-use transport::tls::{TlsOptions, TlsOptionsType, Identity};
-use transport::sync::websocket::WebSocketTransport;
-use transport::{sync::Listener, MessageInterceptor, TransportError};
+use crate::error::Result;
+use crate::transport::tls::{TlsOptions, TlsOptionsType, Identity};
+use crate::transport::sync::websocket::WebSocketTransport;
+use crate::transport::{sync::Listener, MessageInterceptor, TransportError};
 
 const PING_INTERVAL: i64 = 120;
 
@@ -30,7 +30,7 @@ enum WrappedStreamResult {
 pub struct WebSocketListener {
     listener: MioTcpListener,
     tls_acceptor: Option<NativeTlsAcceptor>,
-    transport_cb_handler: Option<Box<MessageInterceptor>>,
+    transport_cb_handler: Option<Box<dyn MessageInterceptor>>,
     ping_timer: Timer,
 }
 
@@ -134,7 +134,7 @@ impl Listener for WebSocketListener {
         }
     }
 
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.transport_cb_handler = Some(cb_handler)
     }
 }

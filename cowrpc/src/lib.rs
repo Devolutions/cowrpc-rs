@@ -35,18 +35,18 @@ use mio::{Events, Poll, PollOpt, Ready, Token};
 use mio_extras::channel::Sender;
 use parking_lot::{Mutex, RwLock};
 
-pub use transport::async::CowFuture;
-pub use transport::tls::{TlsOptions, TlsOptionsBuilder};
-pub use proto::CowRpcMessage;
-pub use proto::Message;
-pub use transport::CowRpcMessageInterceptor;
-pub use transport::MessageInjector as CowRpcMessageInjector;
+pub use crate::transport::r#async::CowFuture;
+pub use crate::transport::tls::{TlsOptions, TlsOptionsBuilder};
+pub use crate::proto::CowRpcMessage;
+pub use crate::proto::Message;
+pub use crate::transport::CowRpcMessageInterceptor;
+pub use crate::transport::MessageInjector as CowRpcMessageInjector;
 
-use error::{CowRpcError, CowRpcErrorCode, Result};
-use peer::*;
-use proto::*;
-use transport::sync::{CowRpcListener, CowRpcTransport};
-use cancel_event::CancelEventHandle;
+use crate::error::{CowRpcError, CowRpcErrorCode, Result};
+use crate::peer::*;
+use crate::proto::*;
+use crate::transport::sync::{CowRpcListener, CowRpcTransport};
+use crate::cancel_event::CancelEventHandle;
 
 pub mod async_peer;
 pub mod async_router;
@@ -60,7 +60,7 @@ pub mod transport;
 
 const NEW_CONNECTION: Token = Token(1);
 
-pub type CallFuture<T> = Box<Future<Item = T, Error = ()> + Send>;
+pub type CallFuture<T> = Box<dyn Future<Item = T, Error = ()> + Send>;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcRole {
@@ -109,7 +109,7 @@ impl CowRpc {
     /// ```
     ///
     /// On success, this method returns the id of the registered interface.
-    pub fn register_iface(&self, iface_reg: CowRpcIfaceReg, server: Option<Box<Server>>) -> Result<u16> {
+    pub fn register_iface(&self, iface_reg: CowRpcIfaceReg, server: Option<Box<dyn Server>>) -> Result<u16> {
         let mut ifaces = self.ifaces.lock();
 
         let iface_id = ifaces.len() as u16;
@@ -147,7 +147,7 @@ impl CowRpc {
         None
     }
 
-    pub fn set_iface_server(&self, iface_id: u16, server: Option<Box<Server>>) {
+    pub fn set_iface_server(&self, iface_id: u16, server: Option<Box<dyn Server>>) {
         let ifaces = self.ifaces.lock();
 
         let ifaces = ifaces.deref();
@@ -721,7 +721,7 @@ pub struct CowRpcIface {
     pub lid: u16,
     pub rid: u16,
     pub procs: Vec<CowRpcProc>,
-    pub server: Option<Box<Server>>,
+    pub server: Option<Box<dyn Server>>,
 }
 
 impl CowRpcIface {
@@ -734,7 +734,7 @@ impl CowRpcIface {
         None
     }
 
-    pub fn set_server(&mut self, server: Option<Box<Server>>) {
+    pub fn set_server(&mut self, server: Option<Box<dyn Server>>) {
         self.server = server
     }
 }
@@ -744,7 +744,7 @@ pub struct CowRpcAsyncIface {
     pub lid: u16,
     pub rid: u16,
     pub procs: Vec<CowRpcProc>,
-    pub server: Option<Box<AsyncServer>>,
+    pub server: Option<Box<dyn AsyncServer>>,
 }
 
 impl CowRpcAsyncIface {
@@ -757,7 +757,7 @@ impl CowRpcAsyncIface {
         None
     }
 
-    pub fn set_server(&mut self, server: Option<Box<AsyncServer>>) {
+    pub fn set_server(&mut self, server: Option<Box<dyn AsyncServer>>) {
         self.server = server
     }
 }
@@ -810,7 +810,7 @@ pub enum CowRpcIdentityType {
 
 impl std::string::ToString for CowRpcIdentityType {
     fn to_string(&self) -> String {
-        use CowRpcIdentityType::*;
+        use crate::CowRpcIdentityType::*;
 
         match *self {
             NONE => "NONE".to_string(),
@@ -824,7 +824,7 @@ impl std::str::FromStr for CowRpcIdentityType {
     type Err = CowRpcError;
 
     fn from_str(s: &str) -> Result<Self> {
-        use CowRpcIdentityType::*;
+        use crate::CowRpcIdentityType::*;
 
         Ok(match s {
             "UPN" => UPN,
@@ -964,7 +964,7 @@ pub trait CowRpcParams: Send + Sync {
     where
         Self: Sized;
 
-    fn write_to(&self, writer: &mut Write) -> Result<()>;
+    fn write_to(&self, writer: &mut dyn Write) -> Result<()>;
 
     fn get_size(&self) -> Result<u32> {
         let mut buffer = Vec::new();
@@ -974,9 +974,9 @@ pub trait CowRpcParams: Send + Sync {
 }
 
 pub trait Server: Send + Sync {
-    fn dispatch_call(&self, caller_id: u32, proc_id: u16, payload: &mut Vec<u8>) -> Result<Box<CowRpcParams>>;
+    fn dispatch_call(&self, caller_id: u32, proc_id: u16, payload: &mut Vec<u8>) -> Result<Box<dyn CowRpcParams>>;
 }
 
 pub trait AsyncServer: Send + Sync {
-    fn dispatch_call(&self, caller_id: u32, proc_id: u16, payload: &mut Vec<u8>) -> CowFuture<Box<CowRpcParams>>;
+    fn dispatch_call(&self, caller_id: u32, proc_id: u16, payload: &mut Vec<u8>) -> CowFuture<Box<dyn CowRpcParams>>;
 }

@@ -1,10 +1,10 @@
 use mio_extras;
 use mouscache;
-use proto;
-use proto::*;
+use crate::proto;
+use crate::proto::*;
 use std;
 use std::fmt;
-use transport;
+use crate::transport;
 
 #[derive(Debug)]
 pub enum CowRpcError {

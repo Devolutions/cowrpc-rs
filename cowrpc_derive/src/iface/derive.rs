@@ -1,4 +1,4 @@
-use iface::attr::validate_data_attributes;
+use crate::iface::attr::validate_data_attributes;
 use proc_macro;
 use proc_macro2::Span;
 use quote::Tokens;
@@ -17,7 +17,7 @@ pub fn impl_cowrpc_iface(input: proc_macro::TokenStream) -> Result<Tokens, Strin
 
     let attributes = validate_data_attributes(&input.attrs)?;
 
-    if attributes.async {
+    if attributes.r#async {
         // Gen Async Definition
         let idents = get_iface_async_idents(&input)?;
 
@@ -114,7 +114,7 @@ fn gen_async_usages() -> Result<Tokens, String> {
 ///        }
 ///    }
 ///}
-fn gen_iface_def(idents: &HashMap<u32, Ident>, input: &DeriveInput, async: bool) -> Result<Tokens, String> {
+fn gen_iface_def(idents: &HashMap<u32, Ident>, input: &DeriveInput, r#async: bool) -> Result<Tokens, String> {
     let iface_name_ident = idents.get(&IFACE_NAME_IDENT).unwrap();
     let iface_def_const_ident = idents.get(&IFACE_DEF_CONST_IDENT).unwrap();
     let iface_def_type_ident = idents.get(&IFACE_DEF_TYPE_IDENT).unwrap();
@@ -164,7 +164,7 @@ fn gen_iface_def(idents: &HashMap<u32, Ident>, input: &DeriveInput, async: bool)
         }
     }
 
-    let dispatch_tokens = gen_server_dispatch_impl(server_call_tokens, async)?;
+    let dispatch_tokens = gen_server_dispatch_impl(server_call_tokens, r#async)?;
 
     let proc_count_ident = Ident::new(
         &format!("COW_{}_PROC_COUNT", iface_name_ident.to_string().to_uppercase()),
@@ -197,8 +197,8 @@ fn gen_iface_def(idents: &HashMap<u32, Ident>, input: &DeriveInput, async: bool)
     })
 }
 
-fn gen_server_dispatch_impl(server_call_tokens: Vec<Tokens>, async: bool) -> Result<Tokens, String> {
-    if async {
+fn gen_server_dispatch_impl(server_call_tokens: Vec<Tokens>, r#async: bool) -> Result<Tokens, String> {
+    if r#async {
         Ok(quote! {
             impl cowrpc::AsyncServer for ServerAsyncDispatch {
                 fn dispatch_call(&self, caller_id: u32, proc_id: u16, payload: &mut Vec<u8>) -> CowFuture<Box<CowRpcParams>> {
