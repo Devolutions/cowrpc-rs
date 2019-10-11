@@ -5,15 +5,15 @@ use std::net::SocketAddr;
 
 use mio::{Evented, Poll, PollOpt, Ready, Token};
 
-use error::{CowRpcError, Result};
-use proto::CowRpcMessage;
+use crate::error::{CowRpcError, Result};
+use crate::proto::CowRpcMessage;
 
-pub mod async;
+pub mod r#async;
 pub mod sync;
 mod uri;
 pub mod tls;
 
-pub use transport::uri::{Uri, UriError};
+pub use crate::transport::uri::{Uri, UriError};
 
 pub enum SupportedProto {
     Tcp,
@@ -31,11 +31,11 @@ pub trait MessageInjector: Sync {
 pub trait MessageInterceptor: Send + Sync {
     fn before_send(&mut self, msg: CowRpcMessage) -> Option<CowRpcMessage>;
     fn before_recv(&mut self, msg: CowRpcMessage) -> Option<CowRpcMessage>;
-    fn as_any(&self) -> &Any;
-    fn clone_boxed(&self) -> Box<MessageInterceptor>;
+    fn as_any(&self) -> &dyn Any;
+    fn clone_boxed(&self) -> Box<dyn MessageInterceptor>;
 }
 
-impl Clone for Box<MessageInterceptor> {
+impl Clone for Box<dyn MessageInterceptor> {
     fn clone(&self) -> Self {
         self.clone_boxed()
     }
@@ -70,11 +70,11 @@ where
         }
     }
 
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn clone_boxed(&self) -> Box<MessageInterceptor> {
+    fn clone_boxed(&self) -> Box<dyn MessageInterceptor> {
         Box::new(CowRpcMessageInterceptor {
             cb_param: self.cb_param.clone(),
             before_send: self.before_send,

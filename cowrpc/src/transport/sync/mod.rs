@@ -6,7 +6,7 @@ mod interceptor;
 pub mod adaptor;
 
 use super::*;
-use transport::tls::TlsOptions;
+use crate::transport::tls::TlsOptions;
 
 trait Listener {
     type Transport: Transport;
@@ -14,7 +14,7 @@ trait Listener {
     fn bind(addr: &SocketAddr) -> Result<Self> where Self: Sized;
     fn set_tls_options(&mut self, tls_opt: TlsOptions);
     fn accept(&self) -> Option<Self::Transport>;
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>);
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
 }
 
 trait Transport {
@@ -23,7 +23,7 @@ trait Transport {
     fn send_message(&mut self, msg: CowRpcMessage) -> Result<()>;
     fn get_next_message(&mut self) -> Result<Option<CowRpcMessage>>;
     fn read_data(&mut self) -> Result<()>;
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>);
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
     fn local_addr(&self) -> Option<SocketAddr>;
     fn remote_addr(&self) -> Option<SocketAddr>;
     fn up_time(&self) -> std::time::Duration;
@@ -34,7 +34,7 @@ pub struct ListenerBuilder {
     interface: Option<SocketAddr>,
     proto: Option<SupportedProto>,
     tls_options: Option<TlsOptions>,
-    interceptor: Option<Box<MessageInterceptor>>,
+    interceptor: Option<Box<dyn MessageInterceptor>>,
     needs_tls: bool,
 }
 
@@ -50,7 +50,7 @@ impl ListenerBuilder {
     }
 
     pub fn from_uri(uri: &str) -> Result<Self> {
-        let uri: Uri = uri.parse().map_err(|parse_error: ::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
+        let uri: Uri = uri.parse().map_err(|parse_error: crate::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
 
         let needs_tls;
 
@@ -116,7 +116,7 @@ impl ListenerBuilder {
         self
     }
 
-    pub fn msg_interceptor(mut self, inter: Box<MessageInterceptor>) -> Self {
+    pub fn msg_interceptor(mut self, inter: Box<dyn MessageInterceptor>) -> Self {
         self.interceptor = Some(inter);
         self
     }
@@ -180,7 +180,7 @@ impl CowRpcListener {
         }
     }
 
-    pub fn set_msg_interceptor(&mut self, interceptor: Box<MessageInterceptor>) {
+    pub fn set_msg_interceptor(&mut self, interceptor: Box<dyn MessageInterceptor>) {
         match *self {
             CowRpcListener::Tcp(ref mut l) => l.set_message_interceptor(interceptor),
             CowRpcListener::WebSocket(ref mut l) => l.set_message_interceptor(interceptor),
@@ -229,7 +229,7 @@ pub enum CowRpcTransport {
 use self::CowRpcTransport::*;
 
 impl CowRpcTransport {
-    pub fn from_interceptor(inter: Box<MessageInterceptor>) -> CowRpcTransport {
+    pub fn from_interceptor(inter: Box<dyn MessageInterceptor>) -> CowRpcTransport {
         Interceptor(interceptor::InterceptorTransport {
             inter,
         })

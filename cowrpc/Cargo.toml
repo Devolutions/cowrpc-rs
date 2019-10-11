@@ -3,6 +3,7 @@ name = "cowrpc"
 version = "0.3.0"
 license = "MIT/Apache-2.0"
 authors = ["François Dubois <fdubois@devolutions.net>, Richer Archambault <rarchambault@devolutions.net>"]
+edition = "2018"
 
 [dependencies]
 byteorder = "1.2"
@@ -20,7 +21,7 @@ timer = "0.2"
 time = "0.1"
 url = "1.7"
 rand = "0.4"
-mouscache = "0.5.2"
+mouscache = "^0.5.4"
 mouscache_derive = "0.4"
 futures = "0.1.25"
 parking_lot = "0.6"

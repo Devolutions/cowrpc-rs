@@ -16,7 +16,7 @@ pub struct DataAttribute {
     pub input: bool,
     pub output: bool,
     pub result: bool,
-    pub async: bool,
+    pub r#async: bool,
 }
 
 pub fn value_from_lit<T: FromStr>(lit: &syn::Lit, attr_name: &str) -> Result<T, String> {
@@ -46,7 +46,7 @@ pub fn validate_data_attributes(attrs: &Vec<Attribute>) -> Result<DataAttribute,
         input: false,
         output: false,
         result: false,
-        async: false,
+        r#async: false,
     };
 
     for meta_items in attrs.iter().filter_map(get_meta_items) {
@@ -55,7 +55,7 @@ pub fn validate_data_attributes(attrs: &Vec<Attribute>) -> Result<DataAttribute,
                 Meta(Word(name)) if name == INPUT_ATTRIBUTE_NAME => attribs.input = true,
                 Meta(Word(name)) if name == OUTPUT_ATTRIBUTE_NAME => attribs.output = true,
                 Meta(Word(name)) if name == RESULT_ATTRIBUTE_NAME => attribs.result = true,
-                Meta(Word(name)) if name == ASYNC_ATTRIBUTE_NAME => attribs.async = true,
+                Meta(Word(name)) if name == ASYNC_ATTRIBUTE_NAME => attribs.r#async = true,
                 Meta(NameValue(ref m)) if m.ident == IFACE_NAME_ATTRIBUTE_NAME => {
                     let name: String = value_from_lit(&m.lit, IFACE_NAME_ATTRIBUTE_NAME)?;
                     attribs.iface_name = Some(name);

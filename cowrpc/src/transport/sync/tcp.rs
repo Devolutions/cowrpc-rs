@@ -1,20 +1,20 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use error::Result;
+use crate::error::Result;
 use mio::net::TcpStream;
 use mio::{Evented, Poll, PollOpt, Ready, Token};
-use proto::{CowRpcMessage, Message};
+use crate::proto::{CowRpcMessage, Message};
 use std;
 use std::io::{ErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::net::SocketAddr;
-use transport::uri::Uri;
-use transport::{MessageInterceptor, sync::Transport, TransportError};
+use crate::transport::uri::Uri;
+use crate::transport::{MessageInterceptor, sync::Transport, TransportError};
 
 pub struct TcpTransport {
     pub stream: TcpStream,
     pub data_received: Vec<u8>,
     pub data_to_send: Vec<u8>,
-    pub callback_handler: Option<Box<MessageInterceptor>>,
+    pub callback_handler: Option<Box<dyn MessageInterceptor>>,
     pub connected_at: std::time::Instant,
 }
 
@@ -136,7 +136,7 @@ impl Transport for TcpTransport {
         }
     }
 
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.callback_handler = Some(cb_handler)
     }
 

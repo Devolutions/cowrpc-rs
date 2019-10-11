@@ -1,9 +1,9 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use error::{CowRpcError, Result};
-use router::CowRpcIdentity;
+use crate::error::{CowRpcError, Result};
+use crate::router::CowRpcIdentity;
 use std;
 use std::io::{Read, Write};
-use CowRpcIdentityType;
+use crate::CowRpcIdentityType;
 
 pub const _COW_RPC_ERROR_MSG_ID: u8 = 0;
 pub const COW_RPC_HANDSHAKE_MSG_ID: u8 = 1;
