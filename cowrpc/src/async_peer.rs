@@ -1820,7 +1820,7 @@ impl CowRpcPeerHandle {
         }
     }
 
-    pub fn call_http_async(&self, bind_context: Arc<CowRpcAsyncBindContext>, http_req: Vec<u8>, timeout: Duration) -> CowFuture<Vec<u8>> {
+    pub fn call_http_async_v2(&self, remote_id: u32, http_req: Vec<u8>, timeout: Duration) -> CowFuture<Vec<u8>> {
         if let Some(inner) = self.inner() {
             let (tx, rx) = channel();
             let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
@@ -1833,7 +1833,7 @@ impl CowRpcPeerHandle {
             let inner_clone = inner.clone();
 
             let fut: CowFuture<Vec<u8>> = Box::new(inner.add_request(req).and_then(move |_| {
-                inner_clone.send_http_req(bind_context.remote_id, id as u32, http_req).and_then(move |_| {
+                inner_clone.send_http_req(remote_id, id as u32, http_req).and_then(move |_| {
                     rx.timeout(timeout)
                         .map_err(|e| match e.into_inner() {
                             Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
@@ -1851,6 +1851,10 @@ impl CowRpcPeerHandle {
             )));
             fut
         }
+    }
+
+    pub fn call_http_async(&self, bind_context: Arc<CowRpcAsyncBindContext>, http_req: Vec<u8>, timeout: Duration) -> CowFuture<Vec<u8>> {
+        self.call_http_async_v2(bind_context.remote_id, http_req, timeout)
     }
 
     pub fn resolve_async(&self, name: &str, timeout: Duration) -> CowFuture<u32> {
