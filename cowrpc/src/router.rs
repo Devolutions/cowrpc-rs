@@ -1,20 +1,20 @@
 use super::{CowRpcIdentityType, CowRpcMessage};
-use cancel_event::CancelEventHandle;
-use error::{CowRpcError, CowRpcErrorCode, Result};
+use crate::cancel_event::CancelEventHandle;
+use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use mio::{Events, Poll, PollOpt, Ready, Token};
 use mouscache;
 use mouscache::Cache;
 use mouscache::CacheFunc;
 use parking_lot::{RwLock, RwLockReadGuard};
-use proto;
-use proto::*;
+use crate::proto;
+use crate::proto::*;
 use rand;
 use std;
 use std::{cell::RefCell, collections::HashMap, fmt, ops::Deref, rc::Rc, sync::Arc};
-use transport::MessageInterceptor;
-use transport::{sync::{ListenerBuilder, CowRpcListener, CowRpcTransport, adaptor::Adaptor}, TransportAdapter};
-use CowRpcMessageInterceptor;
-use TlsOptions;
+use crate::transport::MessageInterceptor;
+use crate::transport::{sync::{ListenerBuilder, CowRpcListener, CowRpcTransport, adaptor::Adaptor}, TransportAdapter};
+use crate::CowRpcMessageInterceptor;
+use crate::TlsOptions;
 
 const CANCEL_EVENT: Token = Token(std::usize::MAX - 1);
 const ADAPTER_EVENT: Token = Token(std::usize::MAX - 2);
@@ -25,7 +25,7 @@ pub const ALLOCATED_COW_ID_SET: &str = "allocated_cow_id";
 pub const COW_ID_RECORDS: &str = "cow_address_records";
 pub const IDENTITY_RECORDS: &str = "identities_records";
 
-type IdentityVerificationCallback = Fn(&[u8]) -> (Vec<u8>, Option<String>);
+type IdentityVerificationCallback = dyn Fn(&[u8]) -> (Vec<u8>, Option<String>);
 
 pub struct CowRpcRouter {
     id: u32,
@@ -33,8 +33,8 @@ pub struct CowRpcRouter {
     multi_router_peer: Option<RefCell<CowRpcRouterPeer>>,
     shared: RouterShared,
     adaptor: Adaptor,
-    on_peer_connection_callback: Option<Box<Fn(&CowRpcRouterPeer)>>,
-    on_peer_disconnection_callback: Option<Box<Fn(&CowRpcRouterPeer)>>,
+    on_peer_connection_callback: Option<Box<dyn Fn(&CowRpcRouterPeer)>>,
+    on_peer_disconnection_callback: Option<Box<dyn Fn(&CowRpcRouterPeer)>>,
 }
 
 impl CowRpcRouter {
@@ -237,7 +237,7 @@ impl CowRpcRouter {
                                 .update(client_id, server_id, iface_id, CowRpcBindState::Unbinding)
                                 {
                                     let remote_id = if client_id == peer.id { server_id } else { client_id };
-                                    if let Some(mut remote_ref) = peers.get_mut(&remote_id) {
+                                    if let Some(remote_ref) = peers.get_mut(&remote_id) {
                                         let mut remote = remote_ref.write();
                                         remote.send_unbind_req(client_id, server_id, iface_id);
                                     } else {

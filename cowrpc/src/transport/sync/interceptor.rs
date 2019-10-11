@@ -1,14 +1,14 @@
-use error::Result;
+use crate::error::Result;
 use mio::Ready;
 use std::net::SocketAddr;
 use std::time::Duration;
-use transport::MessageInterceptor;
-use transport::sync::Transport;
-use transport::TransportError;
-use CowRpcMessage;
+use crate::transport::MessageInterceptor;
+use crate::transport::sync::Transport;
+use crate::transport::TransportError;
+use crate::CowRpcMessage;
 
 pub struct InterceptorTransport {
-    pub inter: Box<MessageInterceptor>,
+    pub inter: Box<dyn MessageInterceptor>,
 }
 
 impl Transport for InterceptorTransport {
@@ -40,7 +40,7 @@ impl Transport for InterceptorTransport {
         Ok(())
     }
 
-    fn set_message_interceptor(&mut self, _cb_handler: Box<MessageInterceptor>) {}
+    fn set_message_interceptor(&mut self, _cb_handler: Box<dyn MessageInterceptor>) {}
 
     fn local_addr(&self) -> Option<SocketAddr> {
         None

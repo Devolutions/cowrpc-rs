@@ -5,9 +5,9 @@ use futures::{future::err, Future, Sink, Stream};
 use tokio::runtime::TaskExecutor;
 
 use super::*;
-use error::CowRpcError;
-use CowRpcMessage;
-use transport::tls::TlsOptions;
+use crate::error::CowRpcError;
+use crate::CowRpcMessage;
+use crate::transport::tls::TlsOptions;
 
 mod tcp;
 mod tcp_listener;
@@ -16,9 +16,9 @@ mod websocket_listener;
 mod interceptor;
 pub mod adaptor;
 
-pub type CowFuture<T> = Box<Future<Item = T, Error = CowRpcError> + Send>;
-pub type CowStream<T> = Box<Stream<Item = T, Error = CowRpcError> + Send>;
-pub type CowSink<T> = Box<Sink<SinkItem = T, SinkError = CowRpcError> + Send>;
+pub type CowFuture<T> = Box<dyn Future<Item = T, Error = CowRpcError> + Send>;
+pub type CowStream<T> = Box<dyn Stream<Item = T, Error = CowRpcError> + Send>;
+pub type CowSink<T> = Box<dyn Sink<SinkItem = T, SinkError = CowRpcError> + Send>;
 
 pub trait Listener {
     type TransportInstance: Transport;
@@ -28,7 +28,7 @@ pub trait Listener {
         Self: Sized;
     fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>>;
     fn set_tls_options(&mut self, tls_opt: TlsOptions);
-    fn set_msg_interceptor(&mut self, cb_handler: Box<MessageInterceptor>);
+    fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
     fn set_executor_handle(&mut self, _handle: TaskExecutor) {
         /* just drop it */
     }
@@ -38,7 +38,7 @@ pub struct ListenerBuilder {
     interface: Option<SocketAddr>,
     proto: Option<SupportedProto>,
     tls_options: Option<TlsOptions>,
-    interceptor: Option<Box<MessageInterceptor>>,
+    interceptor: Option<Box<dyn MessageInterceptor>>,
     executor: Option<TaskExecutor>,
     needs_tls: bool,
 }
@@ -56,7 +56,7 @@ impl ListenerBuilder {
     }
 
     pub fn from_uri(uri: &str) -> Result<Self> {
-        let uri: Uri = uri.parse().map_err(|parse_error: ::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
+        let uri: Uri = uri.parse().map_err(|parse_error: crate::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
 
         let needs_tls;
 
@@ -125,7 +125,7 @@ impl ListenerBuilder {
         self
     }
 
-    pub fn msg_interceptor(mut self, inter: Box<MessageInterceptor>) -> Self {
+    pub fn msg_interceptor(mut self, inter: Box<dyn MessageInterceptor>) -> Self {
         self.interceptor = Some(inter);
         self
     }
@@ -217,7 +217,7 @@ impl CowRpcListener {
         }
     }
 
-    pub fn set_msg_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    pub fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         match self {
             CowRpcListener::Tcp(ref mut tcp) => tcp.set_msg_interceptor(cb_handler),
             CowRpcListener::WebSocket(ref mut ws) => ws.set_msg_interceptor(cb_handler),
@@ -238,7 +238,7 @@ pub trait Transport {
         Self: Sized;
     fn message_sink(&mut self) -> CowSink<CowRpcMessage>;
     fn message_stream(&mut self) -> CowStream<CowRpcMessage>;
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>);
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
     fn local_addr(&self) -> Option<SocketAddr>;
     fn remote_addr(&self) -> Option<SocketAddr>;
     fn up_time(&self) -> Duration;
@@ -251,7 +251,7 @@ pub enum CowRpcTransport {
 }
 
 impl CowRpcTransport {
-    pub fn from_interceptor(inter: Box<MessageInterceptor>) -> CowRpcTransport {
+    pub fn from_interceptor(inter: Box<dyn MessageInterceptor>) -> CowRpcTransport {
         CowRpcTransport::Interceptor(interceptor::InterceptorTransport { inter })
     }
 }
@@ -293,7 +293,7 @@ impl Transport for CowRpcTransport {
         }
     }
 
-    fn set_message_interceptor(&mut self, cb_handler: Box<MessageInterceptor>) {
+    fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         match self {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.set_message_interceptor(cb_handler),
             CowRpcTransport::WebSocket(ref mut ws) => ws.set_message_interceptor(cb_handler),

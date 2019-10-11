@@ -14,9 +14,9 @@ use cowrpc::peer::CowRpcPeer;
 use cowrpc::router::CowRpcRouter;
 use cowrpc::{Client, CowRpc, CowRpcIdentityType};
 
-use ifaces::test_cow;
-use ifaces::test_cow::*;
-use ready_event::ReadyEvent;
+use crate::ifaces::test_cow;
+use crate::ifaces::test_cow::*;
+use crate::ready_event::ReadyEvent;
 
 mod ifaces;
 mod ready_event;
