@@ -27,8 +27,8 @@ futures = "0.1.25"
 parking_lot = "0.6"
 tokio = "0.1.11"
 tokio-tcp = "0.1.2"
-tls-api = "0.1.20"
-tls-api-native-tls = "0.1.20"
+tls-api = "0.2"
+tls-api-native-tls = "0.2"
 
 [dev-dependencies]
 cowrpc_derive = {path = "../cowrpc_derive"}

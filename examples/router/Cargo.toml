@@ -9,7 +9,7 @@ rmp = "0.8.7"
 log = "0.4.1"
 env_logger = "0.5.3"
 ctrlc = { version = "3.0", features = ["termination"] }
-tls-api = "0.1.20"
+tls-api = "0.2"
 
 [dependencies.cowrpc]
 path = "../../cowrpc"
