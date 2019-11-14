@@ -17,6 +17,7 @@ use std;
 use std::{collections::HashMap, fmt, sync::Arc};
 use tokio::prelude::*;
 use tokio::util::FutureExt;
+use tokio::runtime::{Runtime, TaskExecutor};
 use crate::transport::{
     r#async::{ListenerBuilder, CowRpcTransport, Transport, CowSink, CowStream, adaptor::Adaptor},
     MessageInterceptor,
@@ -138,9 +139,7 @@ impl CowRpcRouter {
         self.shared.inner.id
     }
 
-    pub fn run(self) -> Result<()> {
-        use tokio::runtime::Runtime;
-
+    pub fn spawn(self, executor_handle: TaskExecutor) -> Result<RouterMonitor> {
         let CowRpcRouter {
             listener_url,
             listener_tls_options,
@@ -150,10 +149,6 @@ impl CowRpcRouter {
             msg_interceptor,
         } = self;
 
-        let mut runtime =
-            Runtime::new().expect("This should never fails, a runtime is needed by the entire implementation");
-
-        let executor_handle = runtime.executor();
         let router_shared_clone = shared.clone();
 
         let mut listener_builder = ListenerBuilder::from_uri(&listener_url)?.executor(executor_handle.clone());
@@ -168,6 +163,7 @@ impl CowRpcRouter {
 
         let listener = listener_builder.build()?;
 
+        let executor_handle_clone = executor_handle.clone();
         let router_peer_stream = listener.incoming().for_each(move |stream_fut| {
             let router_shared_hand = router_shared_clone.clone();
             let peer_handshake = stream_fut.and_then(move |stream| {
@@ -210,14 +206,14 @@ impl CowRpcRouter {
                 trace!("{:?}", e);
             });
 
-            executor_handle.spawn(peer_fut);
+            executor_handle_clone.spawn(peer_fut);
 
             ok(())
         });
 
-        runtime.spawn(router_peer_stream.map_err(|_cow_error| ()));
+        executor_handle.spawn(router_peer_stream.map_err(|_cow_error| ()));
         let mut router_shared_clone = shared.clone();
-        runtime.spawn(
+        executor_handle.spawn(
             adaptor
                 .message_stream()
                 .for_each(move |msg| {
@@ -227,6 +223,16 @@ impl CowRpcRouter {
                 .map_err(|_| ()),
         );
 
+        Ok(monitor)
+    }
+
+    pub fn run(self) -> Result<()> {
+        let mut runtime =
+            Runtime::new().expect("This should never fails, a runtime is needed by the entire implementation");
+
+        let executor_handle = runtime.executor();
+
+        let monitor = self.spawn(executor_handle)?;
         runtime.block_on(monitor.map_err(|_| CowRpcError::Internal("The runtime stopped unexpectedly".to_string())))
     }
 }
