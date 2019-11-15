@@ -551,9 +551,16 @@ impl RouterShared {
 
         if (dst_id & 0xFFFF_0000) != self.inner.id {
             if let Some(ref router_sender) = &*self.inner.multi_router_peer.read() {
-                if router_sender.send_messages(msg.clone()).is_ok() {
-                    return;
+                match router_sender.send_messages(msg.clone()) {
+                    Ok(_) => {
+                        return;
+                    }
+                    Err(e) => {
+                        error!("Message can't be sent via multi_router_peer (nats): {}", e);
+                    }
                 }
+            } else {
+                error!("RwLock can't be locked as a reader (multi_router_peer)");
             }
         } else {
             if self.find_sender_and_then(dst_id, |sender_opt| {
