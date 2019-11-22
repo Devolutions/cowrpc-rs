@@ -198,7 +198,7 @@ impl CowRpcRouter {
                     peer.map(move |(peer_id, identity)| {
                         router_cleanup_clone.clean_up_connection(peer_id, identity);
                     }).map_err(move |(peer_id, identity, error)| {
-                        error!("Got an error while polling peer {} : {:?}", peer_id, error);
+                        error!("Got an error while polling peer {:#010X} : {:?}", peer_id, error);
                         router_error_clone.clean_up_connection(peer_id, identity);
                         error
                     })
@@ -390,14 +390,14 @@ impl RouterShared {
 
                 {
                     if let Err(e) = self.inner.cache.get_raw_cache().set_rem(ALLOCATED_COW_ID_SET, peer_id) {
-                        error!("Unable to remove allocated cow id {}, got error: {:?}", peer_id, e);
+                        error!("Unable to remove allocated cow id {:#010X}, got error: {:?}", peer_id, e);
                     }
                 }
 
-                trace!("Peer {} removed", peer_id);
+                trace!("Peer {:#010X} removed", peer_id);
             }
             None => {
-                warn!("Unable to remove peer {}", peer_id);
+                warn!("Unable to remove peer {:#010X}", peer_id);
             }
         }
     }
@@ -1207,7 +1207,6 @@ impl CowRpcRouterPeer {
                 let cow_id = self.inner.cow_id;
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
-                        debug!("new identity: id={} - name={}", cow_id, identity.name);
                         self.identity = Some(identity);
                     }
                     Err(e) => {
@@ -1247,7 +1246,6 @@ impl CowRpcRouterPeer {
                 let cow_id = self.inner.cow_id;
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
-                        debug!("new identity: id={} - name={}",cow_id, identity.name);
                         self.identity = Some(identity);
                     }
                     Err(e) => {
@@ -1987,29 +1985,26 @@ impl RouterCache {
             {
                 Ok(true) => {}
                 Ok(false) => warn!(
-                    "Cow addr {} was updated and now has identity {}",
+                    "Cow addr {:#010X} was updated and now has identity {}",
                     peer_id, identity.name
                 ),
                 _ => {
                     return Err(CowRpcError::Internal(format!(
-                        "Unable to add identity {} to peer {}",
+                        "Unable to add identity {} to peer {:#010X}",
                         identity.name, peer_id
                     )));
                 }
             }
 
         match self.inner.hash_set(IDENTITY_RECORDS, identity.name.as_ref(), peer_id) {
-            Ok(true) => {}
-            Ok(false) => warn!(
-                "Identity {} was updated and now belongs to peer {}",
-                identity.name, peer_id
-            ),
+            Ok(true) => info!("Identity added in router cache: den_id: {}, cow_id: {:#010X}", identity.name, peer_id),
+            Ok(false) => warn!("Identity {} was updated and now belongs to peer {:#010X}", identity.name, peer_id),
             Err(redis_err) => {
                 if let Err(e) = self.inner.hash_delete(COW_ID_RECORDS, &[peer_id.to_string().as_ref()]) {
-                    error!("Unable to clean cow id record {}, got error {:?}", peer_id, e);
+                    error!("Unable to clean cow id record {:#010X}, got error {:?}", peer_id, e);
                 }
                 return Err(CowRpcError::Internal(format!(
-                    "Unable to add record of identity {} to peer {} with error {:?}",
+                    "Unable to add record of identity {} to peer {:#010X} with error {:?}",
                     identity.name, peer_id, redis_err
                 )));
             }
@@ -2021,10 +2016,10 @@ impl RouterCache {
     fn remove_cow_identity(&self, identity: &CowRpcIdentity, peer_id: u32) -> Result<()> {
         let mut got_error = false;
         match self.inner.hash_delete(IDENTITY_RECORDS, &[identity.name.as_ref()]) {
-            Ok(_) => {}
+            Ok(_) => info!("Identity removed from router cache: den_id: {}, cow_id: {:#010X}", identity.name, peer_id),
             _ => {
                 got_error = true;
-                error!("Unable to clean cow id record {}", peer_id);
+                error!("Unable to clean cow id record {:#010X}", peer_id);
             }
         }
 
@@ -2032,13 +2027,13 @@ impl RouterCache {
             Ok(_) => {}
             _ => {
                 got_error = true;
-                error!("Unable to clean cow id record {}", peer_id);
+                error!("Unable to clean cow id record {:#010X}", peer_id);
             }
         }
 
         if got_error {
             return Err(CowRpcError::Internal(format!(
-                "Unable to cleam record of identity {} to peer {}",
+                "Unable to cleam record of identity {} to peer {:#010X}",
                 identity.name, peer_id
             )));
         }

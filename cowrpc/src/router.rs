@@ -264,17 +264,17 @@ impl CowRpcRouter {
                             .get_raw_cache()
                             .set_rem(ALLOCATED_COW_ID_SET, peer_id)
                             {
-                                error!("Unable to remove allocated cow id {}, got error: {:?}", peer_id, e);
+                                error!("Unable to remove allocated cow id {:#010X}, got error: {:?}", peer_id, e);
                             }
                     }
 
-                    trace!("Peer {} removed", peer_id);
+                    trace!("Peer {:#010X} removed", peer_id);
 
                     // since there is only one peer per connection, ensure the connection close gracefully
                     let _ = peer.transport.shutdown();
                 }
                 None => {
-                    warn!("Unable to remove peer {}", peer_id);
+                    warn!("Unable to remove peer {:#010X}", peer_id);
                 }
             }
         }
