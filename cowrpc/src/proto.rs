@@ -144,22 +144,22 @@ impl CowRpcMessage {
                 "{} {}",
                 header.get_msg_name(),
                 if header.is_response() {
-                    format!("Response | {} -> {}", header.dst_id, header.src_id)
+                    format!("Response | {:#010X} -> {:#010X}", header.dst_id, header.src_id)
                 } else {
-                    format!("Request | {} -> {}", header.src_id, header.dst_id)
+                    format!("Request | {:#010X} -> {:#010X}", header.src_id, header.dst_id)
                 }
             ),
             CowRpcMessage::Unbind(ref header, _) => format!(
                 "{} {}",
                 header.get_msg_name(),
                 if header.is_response() {
-                    format!("Response | {} -> {}", header.dst_id, header.src_id)
+                    format!("Response | {:#010X} -> {:#010X}", header.dst_id, header.src_id)
                 } else {
-                    format!("Request | {} -> {}", header.src_id, header.dst_id)
+                    format!("Request | {:#010X} -> {:#010X}", header.src_id, header.dst_id)
                 }
             ),
             CowRpcMessage::Call(ref header, ref c, _) => format!(
-                "{} iface {} proc {} | {} -> {}",
+                "{} iface {} proc {} | {:#010X} -> {:#010X}",
                 header.get_msg_name(),
                 c.iface_id,
                 c.proc_id,
@@ -167,7 +167,7 @@ impl CowRpcMessage {
                 header.dst_id
             ),
             CowRpcMessage::Result(ref header, ref r, _) => format!(
-                "{} iface {} proc {} | {} -> {}",
+                "{} iface {} proc {} | {:#010X} -> {:#010X}",
                 header.get_msg_name(),
                 r.iface_id,
                 r.proc_id,
