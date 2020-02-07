@@ -920,7 +920,6 @@ impl CowRpcPeer {
                             error = CowRpcErrorCode::from(header.flags);
                         }
                         return bind_req.tx.send(CowRpcBindRsp { error }).map_err(|e| CowRpcError::Internal(e.to_string()));
-                        ;
                     }
                 }
                 _ => continue, /* Wrong request type, we move to the next one */

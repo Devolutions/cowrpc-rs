@@ -1838,9 +1838,13 @@ impl CowRpcPeerHandle {
                         .map_err(|e| match e.into_inner() {
                             Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
                             None => CowRpcError::Internal("timed out".to_string()),
-                        }).map(move |res| {
-                        res.http_rsp
-                    })
+                        }).and_then(move |res| {
+                            if res._error == CowRpcErrorCode::Success {
+                                Ok(res.http_rsp)
+                            } else {
+                                Err(CowRpcError::CowRpcFailure(res._error))
+                            }
+                        })
                 })
             }));
 

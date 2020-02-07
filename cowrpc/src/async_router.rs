@@ -607,7 +607,7 @@ impl RouterShared {
                             let _ = router_sender.send_messages(msg_clone);
                         }
                     } else {
-                        self.find_sender_and_then(dst_id, |sender_opt| {
+                        self.find_sender_and_then(src_id, |sender_opt| {
                             if let Some(sender_ref) = sender_opt {
                                 let mut msg_clone = msg.clone();
                                 msg_clone.swap_src_dst();

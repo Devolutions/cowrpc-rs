@@ -510,8 +510,7 @@ impl Sink for CowMessageSink {
                 }
             } else {
                 // fragment the buffer
-                use std::io::{Cursor, Read};
-                let mut cursor = Cursor::new(data_to_send);
+                let mut cursor = std::io::Cursor::new(data_to_send);
                 loop {
                     let mut chunk = Vec::with_capacity(WS_BIN_CHUNK_SIZE);
                     match cursor.read(&mut chunk) {
