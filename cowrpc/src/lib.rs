@@ -374,7 +374,7 @@ struct CowRpcResolveRsp {
 }
 
 impl CowRpcResolveRsp {
-    fn get_result(&self) -> Result<(u32)> {
+    fn get_result(&self) -> Result<u32> {
         if self.error == CowRpcErrorCode::Success {
             Ok(self.node_id.unwrap())
         } else {
@@ -561,7 +561,7 @@ struct CowRpcAsyncResolveRsp {
 }
 
 impl CowRpcAsyncResolveRsp {
-    fn get_result(&self) -> Result<(u32)> {
+    fn get_result(&self) -> Result<u32> {
         if self.error == CowRpcErrorCode::Success {
             return Ok(self.node_id.unwrap());
         } else {
