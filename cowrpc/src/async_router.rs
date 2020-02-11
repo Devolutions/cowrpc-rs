@@ -560,7 +560,7 @@ impl RouterShared {
                     }
                 }
             } else {
-                error!("RwLock can't be locked as a reader (multi_router_peer)");
+                error!("can't send message to the other router: multi_router_peer is None (nats is probably not configured)");
             }
         } else {
             if self.find_sender_and_then(dst_id, |sender_opt| {
