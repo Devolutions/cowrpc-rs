@@ -79,7 +79,7 @@ impl Transport for TcpTransport {
             };
         }
 
-        info!(">> {}", msg.get_msg_info());
+        debug!(">> {}", msg.get_msg_info());
         msg.write_to(&mut self.data_to_send)?;
         Ok(())
     }
@@ -103,13 +103,13 @@ impl Transport for TcpTransport {
                     if let Some(ref mut interceptor) = self.callback_handler {
                         match interceptor.before_recv(msg) {
                             Some(msg) => {
-                                info!("<< {}", msg.get_msg_info());
+                                debug!("<< {}", msg.get_msg_info());
                                 return Ok(Some(msg));
                             }
                             None => {}
                         };
                     } else {
-                        info!("<< {}", msg.get_msg_info());
+                        debug!("<< {}", msg.get_msg_info());
                         return Ok(Some(msg));
                     }
                 }
