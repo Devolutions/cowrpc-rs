@@ -4,14 +4,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt};
-use futures::{self, Async, AsyncSink, Future, Sink, Stream};
+use byteorder::{LittleEndian};
+use futures::{self, Async, AsyncSink, Future, Sink, Stream, task};
 use parking_lot::Mutex;
-use tokio::net::TcpStream;
-use tokio::prelude::*;
-use tokio::runtime::TaskExecutor;
-use tokio::timer::Delay;
-use tokio::util::FutureExt;
 use tls_api::{HandshakeError as TlsHandshakeError, MidHandshakeTlsStream, TlsConnector, TlsConnectorBuilder, TlsStream};
 use tls_api_native_tls::TlsConnector as NativeTlsConnector;
 use crate::transport::{
@@ -32,6 +27,10 @@ use url::Url;
 
 use crate::error::{CowRpcError, Result};
 use crate::proto::{CowRpcMessage, Message};
+use tokio_tcp::TcpStream;
+use futures::future::{ok, err};
+use futures_03::compat::Future01CompatExt;
+use futures_03::future::TryFutureExt;
 
 const MISSED_PING_MULTIPLIER: u64 = 2;
 const PING_INTERVAL: u64 = 60;
@@ -69,12 +68,19 @@ pub fn wrap_stream_async(stream: TcpStream, domain: &str, mode: Mode, tls_option
                     let tls_hand = TlsHandshake(Some(mid_hand));
 
                     Box::new(
-                        tls_hand
-                            .timeout(Duration::from_secs(5))
-                            .map_err(|e| match e.into_inner() {
-                                Some(e) => e,
-                                None => CowRpcError::Proto("Tls handshake timed out after 5 sec".to_string()),
-                            }).map(|tls_stream| StreamSwitcher::Tls(tls_stream)),
+                    tokio::time::timeout(::std::time::Duration::from_secs(5),
+                                         tls_hand.compat()).compat()
+                        .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                        .and_then(move |result| {
+                            match result {
+                                Ok(tls_stream) => {
+                                    ok(StreamSwitcher::Tls(tls_stream))
+                                }
+                                Err(e) => {
+                                    err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                }
+                            }
+                        })
                     )
                 }
                 Err(e) => {
@@ -156,7 +162,6 @@ impl Future for TlsHandshake {
 struct ServerWebSocketPingUtils {
     ping_sent: u64,
     ping_expired: Arc<Mutex<bool>>,
-    executor_handle: TaskExecutor,
 }
 
 pub struct WebSocketTransport {
@@ -190,21 +195,15 @@ impl WebSocketTransport {
     pub fn new_server(
         stream: WebSocket<WebSocketStream>,
         callback_handler: Option<Box<dyn MessageInterceptor>>,
-        handle: Option<TaskExecutor>,
     ) -> Self {
-        if let Some(handle) = handle {
-            WebSocketTransport {
-                stream: Arc::new(Mutex::new(stream)),
-                callback_handler,
-                connected_at: Instant::now(),
-                ping_utils: Some(ServerWebSocketPingUtils {
-                    ping_sent: 0,
-                    ping_expired: Arc::new(Mutex::new(true)),
-                    executor_handle: handle,
-                }),
-            }
-        } else {
-            Self::new(stream, callback_handler)
+        WebSocketTransport {
+            stream: Arc::new(Mutex::new(stream)),
+            callback_handler,
+            connected_at: Instant::now(),
+            ping_utils: Some(ServerWebSocketPingUtils {
+                ping_sent: 0,
+                ping_expired: Arc::new(Mutex::new(true)),
+            }),
         }
     }
 }
@@ -254,14 +253,19 @@ impl Transport for WebSocketTransport {
                                 {
                                     Ok(ws) => Box::new(futures::finished(WebSocketTransport::new(ws.0, None))),
                                     Err(HandshakeError::Interrupted(m)) => Box::new(
-                                        ClientWebSocketHandshake(Some(m))
-                                            .timeout(Duration::from_secs(5))
-                                            .map_err(|e| match e.into_inner() {
-                                                Some(e) => e,
-                                                None => CowRpcError::Proto(
-                                                    "Tls handshake timed out after 10 sec".to_string(),
-                                                ),
-                                            }).map(|ws| WebSocketTransport::new(ws, None)),
+                                        tokio::time::timeout(::std::time::Duration::from_secs(5),
+                                                             ClientWebSocketHandshake(Some(m)).compat()).compat()
+                                            .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                                            .and_then(move |result| {
+                                                match result {
+                                                    Ok(ws) => {
+                                                        ok(WebSocketTransport::new(ws, None))
+                                                    }
+                                                    Err(e) => {
+                                                        err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                                    }
+                                                }
+                                            })
                                     ),
                                     Err(e) => {
                                         trace!("ERROR : Handshake failed with {}", e);
@@ -341,9 +345,10 @@ impl CowMessageStream {
                 let stream_clone = self.stream.clone();
 
                 let task = task::current();
-                let timeout = Delay::new(Instant::now() + Duration::from_secs(PING_INTERVAL * (MISSED_PING_MULTIPLIER.pow(ping_utils.ping_sent as u32))));
+                let timeout = tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_secs(PING_INTERVAL * (MISSED_PING_MULTIPLIER.pow(ping_utils.ping_sent as u32))));
 
-                ping_utils.executor_handle.spawn(timeout.then(move |_| {
+                tokio::spawn(async move {
+                    timeout.await;
                     *expired_clone.lock() = true;
                     if let Err(e) = stream_clone
                         .lock()
@@ -353,7 +358,7 @@ impl CowMessageStream {
                     }
                     task.notify();
                     futures::finished::<(), ()>(())
-                }));
+                });
 
                 *expired_guard = false;
                 ping_utils.ping_sent += 1;
@@ -376,7 +381,7 @@ impl Stream for CowMessageStream {
         {
             let data_len = self.data_received.len();
             if data_len > 4 {
-                let msg_len = self.data_received.as_slice().read_u32::<LittleEndian>()? as usize;
+                let msg_len = byteorder::ReadBytesExt::read_u32::<LittleEndian>(&mut self.data_received.as_slice())? as usize;
                 if data_len >= msg_len {
                     let msg;
                     let v: Vec<u8>;
@@ -417,7 +422,7 @@ impl Stream for CowMessageStream {
                         self.data_received.append(&mut data);
                         let data_len = self.data_received.len();
                         if data_len > 4 {
-                            let msg_len = self.data_received.as_slice().read_u32::<LittleEndian>()? as usize;
+                            let msg_len = byteorder::ReadBytesExt::read_u32::<LittleEndian>(&mut self.data_received.as_slice())? as usize;
                             if data_len >= msg_len {
                                 let msg;
                                 let v: Vec<u8>;
@@ -513,7 +518,7 @@ impl Sink for CowMessageSink {
                 let mut cursor = std::io::Cursor::new(data_to_send);
                 loop {
                     let mut chunk = Vec::with_capacity(WS_BIN_CHUNK_SIZE);
-                    match cursor.read(&mut chunk) {
+                    match std::io::Read::read(&mut cursor, &mut chunk) {
                         Ok(0) => {
                             self.data_to_send.clear();
                             return Ok(Async::Ready(()));

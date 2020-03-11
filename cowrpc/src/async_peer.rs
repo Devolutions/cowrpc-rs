@@ -1,29 +1,22 @@
 use super::*;
 use crate::error::CowRpcError;
 use crate::error::CowRpcErrorCode;
-use futures::{
-    future::join_all,
-    future::{err, ok},
-    sync::oneshot::{channel, Receiver, Sender},
-    Async, AsyncSink, Future, Sink, Stream,
-};
+use futures::{future::join_all, future::{err, ok}, sync::oneshot::{channel, Receiver, Sender}, Async, AsyncSink, Future, Sink, Stream, future};
 use parking_lot::{Mutex, RwLock};
 use crate::proto::*;
 use crate::proto::{CowRpcIfaceDef, Message};
-use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::{
     atomic::{self, AtomicUsize},
     Arc,
 };
 use std::time::Duration;
-use tokio::prelude::*;
-use tokio::runtime::Runtime;
-use tokio::runtime::TaskExecutor;
 use crate::transport::{
     r#async::{CowRpcTransport, Transport, CowFuture, CowSink, CowStream},
     Uri,
 };
+use futures_03::compat::Future01CompatExt;
+use futures_03::future::TryFutureExt;
 
 type HandleMonitor = Arc<Mutex<Option<PeerHandle>>>;
 type HandleMsgProcessor = Arc<RwLock<Option<CowRpcPeerAsyncMsgProcessor>>>;
@@ -1386,8 +1379,10 @@ pub struct CowRpcPeer {
     is_server: bool,
     mode: CowRpcMode,
     ifaces: Vec<Arc<RwLock<CowRpcAsyncIface>>>,
+    #[allow(dead_code)]
     monitor: PeerMonitor,
     peer_handle_inner: HandleMsgProcessor,
+    #[allow(dead_code)]
     thread_handle: HandleThreadHandle,
     on_unbind_callback: Option<Box<UnbindCallback>>,
     on_http_msg_callback: Option<Box<HttpMsgCallback>>,
@@ -1454,11 +1449,11 @@ impl CowRpcPeer {
         )
     }
 
-    pub fn spawn_server(self, _executor: TaskExecutor) -> CowFuture<()> {
+    pub fn spawn_server(self) -> CowFuture<()> {
         unimplemented!()
     }
 
-    pub fn spawn_client(self, executor: TaskExecutor) -> CowFuture<()> {
+    pub fn spawn_client(self) -> CowFuture<()> {
         use std::str::FromStr;
 
         let CowRpcPeer {
@@ -1474,7 +1469,6 @@ impl CowRpcPeer {
             on_http_msg_callback,
         } = self;
 
-        let executor_handle = executor;
         let connection_timeout = connection_timeout.unwrap_or_else(|| Duration::from_secs(30));
 
         let uri = match Uri::from_str(&url).map_err(|e| CowRpcError::Internal(e.to_string())) {
@@ -1482,15 +1476,21 @@ impl CowRpcPeer {
             Err(e) => return Box::new(err(e.into())),
         };
 
-        let peer_fut = CowRpcTransport::connect(uri)
-            .timeout(connection_timeout.clone())
-            .map_err(move |e| match e.into_inner() {
-                Some(e) => e,
-                None => CowRpcError::Proto(format!("Connection attempt timed out after {:?}", connection_timeout)),
-            }).and_then(move |transport| {
-            CowRpcAsyncPeer::new(transport, mode, ifaces, on_unbind_callback, on_http_msg_callback)
-                .handshake()
-                .and_then(|peer| peer.register())
+        let peer_fut = tokio::time::timeout(connection_timeout,
+                                            CowRpcTransport::connect(uri).compat()).compat()
+            .map_err(|_| CowRpcError::Proto(format!("Connection attempt timed out")))
+            .and_then(move |transport_result| {
+                match transport_result {
+                    Ok(transport) => {
+                        let fut: CowFuture<CowRpcAsyncPeer> = Box::new(CowRpcAsyncPeer::new(transport, mode, ifaces, on_unbind_callback, on_http_msg_callback)
+                            .handshake()
+                            .and_then(|peer| peer.register()));
+                        fut
+                    }
+                    Err(e) => {
+                        Box::new(err(e)) as CowFuture<CowRpcAsyncPeer>
+                    } ,
+                }
         });
 
         let spawn_fut = peer_fut.map(move |connected_peer| {
@@ -1500,20 +1500,18 @@ impl CowRpcPeer {
 
             let msg_processor = connected_peer.message_processor();
 
-            let msg_exec_handle = executor_handle.clone();
-
             let msg_stream = connected_peer
                 .for_each(move |msg: CowRpcMessage| {
-                    msg_exec_handle.spawn(msg_processor.clone().process_message(msg).map_err(|e| {
+                    tokio::spawn(msg_processor.clone().process_message(msg).map_err(|e| {
                         error!("Msg processor got an error : {:?}", e);
-                    }));
+                    }).compat());
                     ok::<(), CowRpcError>(())
                 }).map_err(|e| {
                 error!("Peer msg stream failed with error : {:?}", e);
                 ()
             });
 
-            executor_handle.spawn(msg_stream);
+            tokio::spawn(msg_stream.compat());
 
             ()
         });
@@ -1521,113 +1519,12 @@ impl CowRpcPeer {
         Box::new(spawn_fut)
     }
 
-    pub fn spawn(self, executor: TaskExecutor) -> CowFuture<()> {
+    pub fn spawn(self) -> CowFuture<()> {
         if self.is_server {
-            self.spawn_server(executor)
+            self.spawn_server()
         } else {
-            self.spawn_client(executor)
+            self.spawn_client()
         }
-    }
-
-    pub fn run_and_then<F, I, E>(self, and_then: F) -> Result<()>
-        where
-            F: Future<Item=I, Error=E> + Send + 'static,
-            I: Send + 'static,
-            E: Send + 'static + Debug,
-    {
-        if self.is_server {
-            self.run_server()
-        } else {
-            self.run_client(and_then)
-        }
-    }
-
-    pub fn run(self) -> Result<()> {
-        if self.is_server {
-            self.run_server()
-        } else {
-            self.run_client(ok::<(), ()>(()))
-        }
-    }
-
-    fn run_client<F, I, E>(self, and_then: F) -> Result<()>
-        where
-            F: Future<Item=I, Error=E> + Send + 'static,
-            I: Send + 'static,
-            E: Send + 'static + Debug,
-    {
-        use std::str::FromStr;
-
-        let CowRpcPeer {
-            url,
-            connection_timeout,
-            is_server: _,
-            mode,
-            ifaces,
-            monitor,
-            peer_handle_inner,
-            thread_handle,
-            on_unbind_callback,
-            on_http_msg_callback,
-        } = self;
-
-        let mut runtime =
-            Runtime::new().expect("This should never fails, a runtime is needed by the entire implementation");
-        let executor_handle = runtime.executor();
-        let connection_timeout = connection_timeout.unwrap_or_else(|| Duration::from_secs(30));
-        let uri = Uri::from_str(&url).map_err(|e| CowRpcError::Internal(e.to_string()))?;
-        let peer_fut = CowRpcTransport::connect(uri)
-            .timeout(connection_timeout.clone())
-            .map_err(move |e| match e.into_inner() {
-                Some(e) => e,
-                None => CowRpcError::Proto(format!("Connection attempt timed out after {:?}", connection_timeout)),
-            }).and_then(move |transport| {
-            CowRpcAsyncPeer::new(transport, mode, ifaces, on_unbind_callback, on_http_msg_callback)
-                .handshake()
-                .and_then(|peer| peer.register())
-        });
-
-        let connected_peer = runtime.block_on(peer_fut)?;
-
-        {
-            *peer_handle_inner.write() = Some(connected_peer.message_processor());
-        }
-
-        let msg_processor = connected_peer.message_processor();
-
-        let msg_stream = connected_peer
-            .for_each(move |msg: CowRpcMessage| {
-                executor_handle.spawn(msg_processor.clone().process_message(msg).map_err(|e| {
-                    error!("Msg processor got an error : {:?}", e);
-                }));
-                ok::<(), CowRpcError>(())
-            }).map_err(|e| {
-            error!("Peer msg stream failed with error : {:?}", e);
-            ()
-        });
-
-        runtime.spawn(msg_stream);
-
-        if let Err(e) = runtime.block_on(and_then) {
-            return Err(CowRpcError::Internal(format!(
-                "The provided callback to run after initialization had an error: {:?}",
-                e
-            )));
-        }
-
-        let join = std::thread::spawn(move || {
-            runtime.block_on(monitor.map_err(|_| CowRpcError::Internal("The runtime stopped unexpectedly".to_string())))
-        });
-
-        {
-            *thread_handle.lock() = Some(join);
-        }
-
-        Ok(())
-    }
-
-    fn run_server(self) -> Result<()> {
-        unimplemented!()
     }
 
     pub fn register_iface(&mut self, iface_reg: CowRpcIfaceReg, server: Option<Box<dyn AsyncServer>>) -> Result<u16> {
@@ -1767,16 +1664,24 @@ impl CowRpcPeerHandle {
 
             let fut: CowFuture<()> = Box::new(inner.add_request(req).and_then(move |_| {
                 inner_clone.send_identify_req(&name, identity_type).and_then(move |_| {
-                    rx.timeout(timeout)
-                        .map_err(|e| match e.into_inner() {
-                            Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
-                            None => CowRpcError::Internal("timed out".to_string()),
-                        }).and_then(move |res| match res.get_result() {
-                        Ok(r) => ok(r),
-                        Err(e) => err(e),
+                    tokio::time::timeout(timeout, rx.compat()).compat()
+                        .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                        .and_then(move |result|
+                            match result {
+                                Ok(res) => {
+                                    match res.get_result() {
+                                        Ok(r) => ok(r),
+                                        Err(e) => err(e),
+                                    }
+                                }
+                                Err(e) => {
+                                    err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                }
+                            }
+                        )
                     })
                 })
-            }));
+            );
 
             fut
         } else {
@@ -1801,13 +1706,18 @@ impl CowRpcPeerHandle {
 
             let fut: CowFuture<Vec<u8>> = Box::new(inner.add_request(req).and_then(move |_| {
                 inner_clone.send_verify_req(id as u32, payload).and_then(move |_| {
-                    rx.timeout(timeout)
-                        .map_err(|e| match e.into_inner() {
-                            Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
-                            None => CowRpcError::Internal("timed out".to_string()),
-                        }).map(move |res| {
-                        res.payload
-                    })
+                    tokio::time::timeout(timeout, rx.compat()).compat()
+                        .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                        .and_then(move |result|
+                            match result {
+                                Ok(res) => {
+                                    ok(res.payload)
+                                }
+                                Err(e) => {
+                                    err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                }
+                            }
+                        )
                 })
             }));
 
@@ -1834,17 +1744,22 @@ impl CowRpcPeerHandle {
 
             let fut: CowFuture<Vec<u8>> = Box::new(inner.add_request(req).and_then(move |_| {
                 inner_clone.send_http_req(remote_id, id as u32, http_req).and_then(move |_| {
-                    rx.timeout(timeout)
-                        .map_err(|e| match e.into_inner() {
-                            Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
-                            None => CowRpcError::Internal("timed out".to_string()),
-                        }).and_then(move |res| {
-                            if res._error == CowRpcErrorCode::Success {
-                                Ok(res.http_rsp)
-                            } else {
-                                Err(CowRpcError::CowRpcFailure(res._error))
+                    tokio::time::timeout(timeout, rx.compat()).compat()
+                        .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                        .and_then(move |result|
+                            match result {
+                                Ok(res) => {
+                                    if res._error == CowRpcErrorCode::Success {
+                                        ok(res.http_rsp)
+                                    } else {
+                                        err(CowRpcError::CowRpcFailure(res._error))
+                                    }
+                                }
+                                Err(e) => {
+                                    err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                }
                             }
-                        })
+                        )
                 })
             }));
 
@@ -1881,14 +1796,21 @@ impl CowRpcPeerHandle {
                 inner_clone
                     .send_resolve_req(None, Some(&name), false)
                     .and_then(move |_| {
-                        rx.timeout(timeout)
-                            .map_err(|e| match e.into_inner() {
-                                Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
-                                None => CowRpcError::Internal("timed out".to_string()),
-                            }).and_then(move |res| match res.get_result() {
-                            Ok(r) => ok(r),
-                            Err(e) => err(e),
-                        })
+                        tokio::time::timeout(timeout, rx.compat()).compat()
+                            .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                            .and_then(move |result|
+                                match result {
+                                    Ok(res) => {
+                                        match res.get_result() {
+                                            Ok(r) => ok(r),
+                                            Err(e) => err(e),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                    }
+                                }
+                            )
                     })
             }));
 
@@ -1919,14 +1841,21 @@ impl CowRpcPeerHandle {
                 inner_clone
                     .send_resolve_req(Some(node_id), None, true)
                     .and_then(move |_| {
-                        rx.timeout(timeout)
-                            .map_err(|e| match e.into_inner() {
-                                Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
-                                None => CowRpcError::Internal("timed out".to_string()),
-                            }).and_then(move |res| match res.get_reverse_result() {
-                            Ok(r) => ok(r),
-                            Err(e) => err(e),
-                        })
+                        tokio::time::timeout(timeout, rx.compat()).compat()
+                            .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                            .and_then(move |result|
+                                match result {
+                                    Ok(res) => {
+                                        match res.get_reverse_result() {
+                                            Ok(r) => ok(r),
+                                            Err(e) => err(e),
+                                        }
+                                    }
+                                    Err(e) => {
+                                        err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                    }
+                                }
+                            )
                     })
             }));
 
@@ -1981,34 +1910,36 @@ impl CowRpcPeerHandle {
 
                     let fut: CowFuture<Arc<CowRpcAsyncBindContext>> = Box::new(processor.add_request(req).and_then(move |_| {
                         processor_clone.send_bind_req(server_id, &iface).and_then(move |_| {
-                            rx.timeout(timeout)
-                                .map_err(|e| {
-                                    match e.into_inner() {
-                                        Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
-                                        None => CowRpcError::Internal("timed out".to_string()),
-                                    }
-                                })
-                                .and_then(move |res| {
-                                    let bind_context = if res.is_success() {
-                                        CowRpcAsyncBindContext::new(false, server_id, &iface)
-                                    } else {
-                                        match res.get_error() {
-                                            CowRpcErrorCode::AlreadyBound => {
-                                                trace!("bind context already existing remotely, creating one locally");
+                            tokio::time::timeout(timeout, rx.compat()).compat()
+                                .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                                .and_then(move |result|
+                                    match result {
+                                        Ok(res) => {
+                                            let bind_context = if res.is_success() {
                                                 CowRpcAsyncBindContext::new(false, server_id, &iface)
+                                            } else {
+                                                match res.get_error() {
+                                                    CowRpcErrorCode::AlreadyBound => {
+                                                        trace!("bind context already existing remotely, creating one locally");
+                                                        CowRpcAsyncBindContext::new(false, server_id, &iface)
+                                                    }
+                                                    _ => {
+                                                        return err(CowRpcError::CowRpcFailure(res.get_error()));
+                                                    }
+                                                }
+                                            };
+
+                                            {
+                                                processor.inner.bind_contexts.write().push(bind_context.clone());
                                             }
-                                            _ => {
-                                                return err(CowRpcError::CowRpcFailure(res.get_error()));
-                                            }
+
+                                            ok(bind_context)
                                         }
-                                    };
-
-                                    {
-                                        processor.inner.bind_contexts.write().push(bind_context.clone());
+                                        Err(e) => {
+                                            err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                        }
                                     }
-
-                                    ok(bind_context)
-                                })
+                                )
                         })
                     }));
 
@@ -2050,26 +1981,31 @@ impl CowRpcPeerHandle {
                 processor_clone
                     .send_unbind_req(bind_context.remote_id, true, &bind_context.iface)
                     .and_then(move |_| {
-                        rx.timeout(timeout)
-                            .map_err(|e| match e.into_inner() {
-                                Some(e) => CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)),
-                                None => CowRpcError::Internal("timed out".to_string()),
-                            }).and_then(move |res| {
-                            let processor_clone = processor.clone();
-                            if res.is_success() {
-                                let fut: CowFuture<()> = Box::new(
-                                    processor_clone
-                                        .remove_bind_context(
-                                            bind_context.is_server,
-                                            bind_context.remote_id,
-                                            bind_context.get_iface_remote_id(),
-                                        ).map(|_| ()),
-                                );
-                                fut
-                            } else {
-                                Box::new(err(CowRpcError::CowRpcFailure(res.get_error())))
-                            }
-                        })
+                        tokio::time::timeout(timeout, rx.compat()).compat()
+                            .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                            .and_then(move |result|
+                                match result {
+                                    Ok(res) => {
+                                        let processor_clone = processor.clone();
+                                        if res.is_success() {
+                                            let fut: CowFuture<()> = Box::new(
+                                                processor_clone
+                                                    .remove_bind_context(
+                                                        bind_context.is_server,
+                                                        bind_context.remote_id,
+                                                        bind_context.get_iface_remote_id(),
+                                                    ).map(|_| ()),
+                                            );
+                                            fut
+                                        } else {
+                                            Box::new(err(CowRpcError::CowRpcFailure(res.get_error())))
+                                        }
+                                    }
+                                    Err(e) => {
+                                        Box::new(err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e))))
+                                    }
+                                }
+                            )
                     })
             }));
 
@@ -2107,56 +2043,59 @@ impl CowRpcPeerHandle {
                     processor_clone
                         .send_call_req(bind_context.clone(), proc_id, id as u32, params)
                         .and_then(move |_| {
-                            rx.timeout(Duration::from_secs(10))
-                                .map_err(|e| match e.into_inner() {
-                                    Some(e) => {
-                                        CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e))
-                                    }
-                                    None => CowRpcError::Internal("timed out".to_string()),
-                                }).and_then(move |res| {
-                                let processor_clone = processor.clone();
-                                if res.is_success() {
-                                    let mut msg_pack = &res.msg_pack[..];
-                                    let fut: CowFuture<T> = Box::new(match T::read_from(&mut msg_pack) {
-                                        Ok(output_param) => ok(output_param),
-                                        Err(e) => err(e),
-                                    });
-                                    fut
-                                } else {
-                                    let (remote_id, iface_rid) = {
-                                        (
-                                            bind_context.get_iface_remote_id() as u32,
-                                            bind_context.iface.read().rid.clone(),
-                                        )
-                                    };
-                                    let fut: CowFuture<T> = Box::new(match res.get_error() {
-                                        CowRpcErrorCode::NotBound => {
-                                            trace!("bind context existing locally but not remotely, deleting it");
-                                            let fut: CowFuture<T> = Box::new(
-                                                processor_clone
-                                                    .remove_bind_context(false, remote_id, iface_rid)
-                                                    .and_then(move |bind_context_removed| {
-                                                        if bind_context_removed.is_none() {
-                                                            warn!(
-                                                                "Unable to remove bind context remote {}  iface {}",
-                                                                remote_id, iface_rid
-                                                            );
-                                                        }
+                            tokio::time::timeout(Duration::from_secs(10), rx.compat()).compat()
+                                .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                                .and_then(move |result|
+                                    match result {
+                                        Ok(res) => {
+                                            let processor_clone = processor.clone();
+                                            if res.is_success() {
+                                                let mut msg_pack = &res.msg_pack[..];
+                                                let fut: CowFuture<T> = Box::new(match T::read_from(&mut msg_pack) {
+                                                    Ok(output_param) => ok(output_param),
+                                                    Err(e) => err(e),
+                                                });
+                                                fut
+                                            } else {
+                                                let (remote_id, iface_rid) = {
+                                                    (
+                                                        bind_context.get_iface_remote_id() as u32,
+                                                        bind_context.iface.read().rid.clone(),
+                                                    )
+                                                };
+                                                let fut: CowFuture<T> = Box::new(match res.get_error() {
+                                                    CowRpcErrorCode::NotBound => {
+                                                        trace!("bind context existing locally but not remotely, deleting it");
+                                                        let fut: CowFuture<T> = Box::new(
+                                                            processor_clone
+                                                                .remove_bind_context(false, remote_id, iface_rid)
+                                                                .and_then(move |bind_context_removed| {
+                                                                    if bind_context_removed.is_none() {
+                                                                        warn!(
+                                                                            "Unable to remove bind context remote {}  iface {}",
+                                                                            remote_id, iface_rid
+                                                                        );
+                                                                    }
 
-                                                        err(CowRpcError::CowRpcFailure(res.get_error()))
-                                                    }),
-                                            );
-                                            fut
+                                                                    err(CowRpcError::CowRpcFailure(res.get_error()))
+                                                                }),
+                                                        );
+                                                        fut
+                                                    }
+                                                    _ => {
+                                                        let fut: CowFuture<T> =
+                                                            Box::new(err(CowRpcError::CowRpcFailure(res.get_error())));
+                                                        fut
+                                                    }
+                                                });
+                                                fut
+                                            }
                                         }
-                                        _ => {
-                                            let fut: CowFuture<T> =
-                                                Box::new(err(CowRpcError::CowRpcFailure(res.get_error())));
-                                            fut
+                                        Err(e) => {
+                                            Box::new(err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e))))
                                         }
-                                    });
-                                    fut
-                                }
-                            })
+                                    }
+                                )
                         })
                 }));
 

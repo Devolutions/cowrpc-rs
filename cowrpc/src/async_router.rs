@@ -1,7 +1,7 @@
 use super::{CowRpcIdentityType, CowRpcMessage};
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use futures::{
-    future::ok,
+    future::ok, future::err,
     sync::oneshot::{channel, Receiver, Sender},
     Async, Future, Stream,
 };
@@ -15,15 +15,14 @@ use rand;
 use crate::router::CowRpcIdentity;
 use std;
 use std::{collections::HashMap, fmt, sync::Arc};
-use tokio::prelude::*;
-use tokio::util::FutureExt;
-use tokio::runtime::{Runtime, TaskExecutor};
 use crate::transport::{
     r#async::{ListenerBuilder, CowRpcTransport, Transport, CowSink, CowStream, adaptor::Adaptor},
     MessageInterceptor,
     tls::TlsOptions,
 };
 use crate::CowRpcMessageInterceptor;
+use futures_03::compat::Future01CompatExt;
+use futures_03::future::TryFutureExt;
 
 pub type RouterMonitor = Receiver<()>;
 
@@ -139,7 +138,7 @@ impl CowRpcRouter {
         self.shared.inner.id
     }
 
-    pub fn spawn(self, executor_handle: TaskExecutor) -> Result<RouterMonitor> {
+    pub fn spawn(self) -> Result<RouterMonitor> {
         let CowRpcRouter {
             listener_url,
             listener_tls_options,
@@ -151,7 +150,7 @@ impl CowRpcRouter {
 
         let router_shared_clone = shared.clone();
 
-        let mut listener_builder = ListenerBuilder::from_uri(&listener_url)?.executor(executor_handle.clone());
+        let mut listener_builder = ListenerBuilder::from_uri(&listener_url)?;
 
         if let Some(interceptor) = msg_interceptor {
             listener_builder = listener_builder.msg_interceptor(interceptor);
@@ -163,18 +162,22 @@ impl CowRpcRouter {
 
         let listener = listener_builder.build()?;
 
-        let executor_handle_clone = executor_handle.clone();
         let router_peer_stream = listener.incoming().for_each(move |stream_fut| {
             let router_shared_hand = router_shared_clone.clone();
             let peer_handshake = stream_fut.and_then(move |stream| {
-                CowRpcRouterPeer::new(stream, router_shared_hand.clone())
-                    .timeout(::std::time::Duration::from_secs(PEER_CONNECTION_GRACE_PERIOD))
-                    .map_err(|e| match e.into_inner() {
-                        Some(e) => e,
-                        None => CowRpcError::Proto(format!(
-                            "handshake timed out after {}",
-                            PEER_CONNECTION_GRACE_PERIOD
-                        )),
+
+                tokio::time::timeout(::std::time::Duration::from_secs(PEER_CONNECTION_GRACE_PERIOD),
+                                     CowRpcRouterPeer::new(stream, router_shared_hand.clone()).compat()).compat()
+                    .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                    .and_then(move |result| {
+                        match result {
+                            Ok(res) => {
+                                ok(res)
+                            }
+                            Err(e) => {
+                                err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                            }
+                        }
                     })
             });
 
@@ -206,34 +209,25 @@ impl CowRpcRouter {
                 trace!("{:?}", e);
             });
 
-            executor_handle_clone.spawn(peer_fut);
+            tokio::spawn(peer_fut.compat());
 
             ok(())
         });
 
-        executor_handle.spawn(router_peer_stream.map_err(|_cow_error| ()));
+        tokio::spawn(router_peer_stream.map_err(|_cow_error| ()).compat());
         let mut router_shared_clone = shared.clone();
-        executor_handle.spawn(
+        tokio::spawn(
             adaptor
                 .message_stream()
                 .for_each(move |msg| {
                     router_shared_clone.process_msg(msg);
                     ok::<(), CowRpcError>(())
                 }).map(|_| ())
-                .map_err(|_| ()),
+                .map_err(|_| ())
+                .compat(),
         );
 
         Ok(monitor)
-    }
-
-    pub fn run(self) -> Result<()> {
-        let mut runtime =
-            Runtime::new().expect("This should never fails, a runtime is needed by the entire implementation");
-
-        let executor_handle = runtime.executor();
-
-        let monitor = self.spawn(executor_handle)?;
-        runtime.block_on(monitor.map_err(|_| CowRpcError::Internal("The runtime stopped unexpectedly".to_string())))
     }
 }
 
