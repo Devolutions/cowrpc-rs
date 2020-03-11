@@ -400,7 +400,7 @@ impl Transport for WebSocketTransport {
             };
         }
 
-        info!(">> {}", msg.get_msg_info());
+        debug!(">> {}", msg.get_msg_info());
         msg.write_to(&mut self.data_to_send)?;
         Ok(())
     }
@@ -424,7 +424,7 @@ impl Transport for WebSocketTransport {
                     if let Some(ref mut interceptor) = self.callback_handler {
                         match interceptor.before_recv(msg) {
                             Some(msg) => {
-                                info!("<< {}", msg.get_msg_info());
+                                debug!("<< {}", msg.get_msg_info());
                                 return Ok(Some(msg));
                             }
                             None => {
@@ -432,7 +432,7 @@ impl Transport for WebSocketTransport {
                             }
                         };
                     } else {
-                        info!("<< {}", msg.get_msg_info());
+                        debug!("<< {}", msg.get_msg_info());
                         return Ok(Some(msg));
                     }
                 }

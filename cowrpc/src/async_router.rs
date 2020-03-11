@@ -726,7 +726,7 @@ impl RouterShared {
                     debug!("Identity {} removed", identity.name);
                 }
                 Err(e) => {
-                    error!(
+                    warn!(
                         "Unable to remove identity record {}, got error: {:?}",
                         &identity.name, e
                     );
@@ -1466,7 +1466,7 @@ impl CowRpcRouterPeer {
                     debug!("Identity {} removed", identity.name);
                 }
                 Err(e) => {
-                    error!(
+                    warn!(
                         "Unable to remove identity record {}, got error: {:?}",
                         &identity.name, e
                     );

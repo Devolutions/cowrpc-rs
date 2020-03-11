@@ -390,13 +390,13 @@ impl Stream for CowMessageStream {
                     if let Some(ref mut interceptor) = self.callback_handler {
                         match interceptor.before_recv(msg) {
                             Some(msg) => {
-                                info!("<< {}", msg.get_msg_info());
+                                debug!("<< {}", msg.get_msg_info());
                                 return Ok(Async::Ready(Some(msg)));
                             }
                             None => {}
                         };
                     } else {
-                        info!("<< {}", msg.get_msg_info());
+                        debug!("<< {}", msg.get_msg_info());
                         return Ok(Async::Ready(Some(msg)));
                     }
                 }
@@ -431,13 +431,13 @@ impl Stream for CowMessageStream {
                                 if let Some(ref mut interceptor) = self.callback_handler {
                                     match interceptor.before_recv(msg) {
                                         Some(msg) => {
-                                            info!("<< {}", msg.get_msg_info());
+                                            debug!("<< {}", msg.get_msg_info());
                                             return Ok(Async::Ready(Some(msg)));
                                         }
                                         None => {}
                                     };
                                 } else {
-                                    info!("<< {}", msg.get_msg_info());
+                                    debug!("<< {}", msg.get_msg_info());
                                     return Ok(Async::Ready(Some(msg)));
                                 }
                             }
@@ -484,7 +484,7 @@ impl Sink for CowMessageSink {
             };
         }
 
-        info!(">> {}", msg.get_msg_info());
+        debug!(">> {}", msg.get_msg_info());
         msg.write_to(&mut self.data_to_send)?;
         Ok(AsyncSink::Ready)
     }
