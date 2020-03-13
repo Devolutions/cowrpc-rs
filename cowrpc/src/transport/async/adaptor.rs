@@ -1,10 +1,9 @@
 use crate::error::{CowRpcError, Result};
-use futures::{Async, Stream};
+use futures::{Async, Stream, task};
 use parking_lot::Mutex;
 use crate::proto::CowRpcMessage;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::prelude::*;
 use super::*;
 
 #[derive(Clone)]

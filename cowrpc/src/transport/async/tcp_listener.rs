@@ -4,7 +4,7 @@ use futures::{
     Stream,
 };
 use std::net::SocketAddr;
-use tokio::net::TcpListener as TcpTokioListener;
+use tokio_tcp::TcpListener as TcpTokioListener;
 use crate::transport::{
     r#async::{Listener, CowFuture, CowStream, tcp::TcpTransport},
     MessageInterceptor,

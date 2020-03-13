@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use futures::{future::err, Future, Sink, Stream};
-use tokio::runtime::TaskExecutor;
 
 use super::*;
 use crate::error::CowRpcError;
@@ -29,7 +28,7 @@ pub trait Listener {
     fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>>;
     fn set_tls_options(&mut self, tls_opt: TlsOptions);
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
-    fn set_executor_handle(&mut self, _handle: TaskExecutor) {
+    fn set_executor_handle(&mut self) {
         /* just drop it */
     }
 }
@@ -39,7 +38,6 @@ pub struct ListenerBuilder {
     proto: Option<SupportedProto>,
     tls_options: Option<TlsOptions>,
     interceptor: Option<Box<dyn MessageInterceptor>>,
-    executor: Option<TaskExecutor>,
     needs_tls: bool,
 }
 
@@ -50,7 +48,6 @@ impl ListenerBuilder {
             proto: None,
             tls_options: None,
             interceptor: None,
-            executor: None,
             needs_tls: false,
         }
     }
@@ -110,7 +107,6 @@ impl ListenerBuilder {
             proto: Some(proto),
             tls_options: None,
             interceptor: None,
-            executor: None,
             needs_tls,
         })
     }
@@ -127,11 +123,6 @@ impl ListenerBuilder {
 
     pub fn msg_interceptor(mut self, inter: Box<dyn MessageInterceptor>) -> Self {
         self.interceptor = Some(inter);
-        self
-    }
-
-    pub fn executor(mut self, handle: TaskExecutor) -> Self {
-        self.executor = Some(handle);
         self
     }
 
@@ -165,10 +156,6 @@ impl ListenerBuilder {
 
         if let Some(tls_options) = self.tls_options {
             listener.set_tls_options(tls_options);
-        }
-
-        if let Some(handle) = self.executor {
-            listener.set_executor_handle(handle);
         }
 
         if let Some(interceptor) = self.interceptor {
@@ -221,13 +208,6 @@ impl CowRpcListener {
         match self {
             CowRpcListener::Tcp(ref mut tcp) => tcp.set_msg_interceptor(cb_handler),
             CowRpcListener::WebSocket(ref mut ws) => ws.set_msg_interceptor(cb_handler),
-        }
-    }
-
-    pub fn set_executor_handle(&mut self, handle: TaskExecutor) {
-        match self {
-            CowRpcListener::Tcp(ref mut tcp) => tcp.set_executor_handle(handle),
-            CowRpcListener::WebSocket(ref mut ws) => ws.set_executor_handle(handle),
         }
     }
 }

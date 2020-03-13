@@ -1,6 +1,6 @@
 [package]
 name = "cowrpc"
-version = "0.3.0"
+version = "0.4.0"
 license = "MIT/Apache-2.0"
 authors = ["François Dubois <fdubois@devolutions.net>, Richer Archambault <rarchambault@devolutions.net>"]
 edition = "2018"
@@ -23,9 +23,10 @@ url = "1.7"
 rand = "0.4"
 mouscache = "^0.5.4"
 mouscache_derive = "0.4"
-futures = "0.1.25"
+futures = "0.1.29"
+futures_03 = { package = "futures", version = "0.3", features = ["compat"] }
 parking_lot = "0.6"
-tokio = "0.1.11"
+tokio = { version = "0.2.11", features = ["full"] }
 tokio-tcp = "0.1.2"
 tls-api = { git = "https://github.com/devolutions/rust-tls-api", branch = "wayk" }
 tls-api-native-tls = { git = "https://github.com/devolutions/rust-tls-api", branch = "wayk" }

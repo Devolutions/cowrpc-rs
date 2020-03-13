@@ -1,11 +1,7 @@
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use futures::future::{err, ok};
 use futures::{Future, Stream};
-use tokio::net::{TcpListener as TcpTokioListener, TcpStream};
-use tokio::prelude::*;
-use tokio::runtime::TaskExecutor;
 
 use tls_api::HandshakeError as TlsHandshakeError;
 use tls_api::{TlsAcceptor, TlsAcceptorBuilder, TlsStream};
@@ -16,6 +12,9 @@ use tungstenite::{
     handshake::server::{NoCallback, ServerHandshake},
     stream::Stream as StreamSwitcher,
 };
+use futures_03::compat::Future01CompatExt;
+use futures_03::future::TryFutureExt;
+
 
 use crate::error::{CowRpcError, Result};
 use crate::transport::{
@@ -23,6 +22,8 @@ use crate::transport::{
     MessageInterceptor, TransportError,
     tls::{Identity, TlsOptions, TlsOptionsType},
 };
+use tokio_tcp::TcpStream;
+use tokio_tcp::TcpListener as TcpTokioListener;
 
 pub type WebSocketStream = StreamSwitcher<TcpStream, TlsStream<TcpStream>>;
 
@@ -34,12 +35,19 @@ fn wrap_stream_async(tls_acceptor: &Option<NativeTlsAcceptor>, stream: TcpStream
                 let tls_hand = TlsHandshake(Some(mid_hand));
 
                 Box::new(
-                    tls_hand
-                        .timeout(Duration::from_secs(5))
-                        .map_err(|e| match e.into_inner() {
-                            Some(e) => e,
-                            None => CowRpcError::Proto("Tls handshake timed out after 5 sec".to_string()),
-                        }).map(|tls_stream| StreamSwitcher::Tls(tls_stream)),
+                    tokio::time::timeout(::std::time::Duration::from_secs(5),
+                                         tls_hand.compat()).compat()
+                        .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                        .and_then(move |result| {
+                            match result {
+                                Ok(tls_stream) => {
+                                    ok(StreamSwitcher::Tls(tls_stream))
+                                }
+                                Err(e) => {
+                                    err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                }
+                            }
+                        })
                 )
             }
             Err(e) => {
@@ -56,7 +64,6 @@ pub struct WebSocketListener {
     listener: TcpTokioListener,
     tls_acceptor: Option<NativeTlsAcceptor>,
     transport_cb_handler: Option<Box<dyn MessageInterceptor>>,
-    executor_handle: Option<TaskExecutor>,
 }
 
 impl Listener for WebSocketListener {
@@ -72,7 +79,6 @@ impl Listener for WebSocketListener {
                     listener: l,
                     tls_acceptor: None,
                     transport_cb_handler: None,
-                    executor_handle: None,
                 })
             }
             Err(e) => {
@@ -82,7 +88,7 @@ impl Listener for WebSocketListener {
     }
 
     fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
-        let WebSocketListener { listener, tls_acceptor, transport_cb_handler, executor_handle } = self;
+        let WebSocketListener { listener, tls_acceptor, transport_cb_handler } = self;
 
         Box::new(listener.incoming().map_err(|e| e.into()).map(move |tcp_stream| {
             let tls_acceptor_clone = match tls_acceptor {
@@ -90,7 +96,6 @@ impl Listener for WebSocketListener {
                 Some(ref acceptor) => Some(NativeTlsAcceptor(acceptor.0.clone()))
             };
             let transport_cb_handler_clone = transport_cb_handler.clone();
-            let executor_clone = executor_handle.clone();
 
             let fut: CowFuture<WebSocketTransport> = Box::new(
                 wrap_stream_async(&tls_acceptor_clone, tcp_stream).and_then(move |ws_stream| {
@@ -99,21 +104,25 @@ impl Listener for WebSocketListener {
                             Ok(ws) => Box::new(ok(WebSocketTransport::new_server(
                                 ws,
                                 transport_cb_handler_clone.clone(),
-                                executor_clone.clone(),
                             ))),
                             Err(HandshakeError::Interrupted(m)) => Box::new(
-                                ServerWebSocketHandshake(Some(m))
-                                    .timeout(Duration::from_secs(5))
-                                    .map_err(|e| match e.into_inner() {
-                                        Some(e) => e,
-                                        None => CowRpcError::Proto("Tls handshake timed out after 5 sec".to_string()),
-                                    }).map(move |ws| {
-                                        WebSocketTransport::new_server(
-                                            ws,
-                                            transport_cb_handler_clone.clone(),
-                                            executor_clone.clone(),
-                                        )
-                                    }),
+
+                                tokio::time::timeout(::std::time::Duration::from_secs(5),
+                                                     ServerWebSocketHandshake(Some(m)).compat()).compat()
+                                    .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+                                    .and_then(move |result| {
+                                        match result {
+                                            Ok(ws) => {
+                                                ok(WebSocketTransport::new_server(
+                                                    ws,
+                                                    transport_cb_handler_clone.clone(),
+                                                ))
+                                            }
+                                            Err(e) => {
+                                                err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+                                            }
+                                        }
+                                    })
                             ),
                             Err(e) => {
                                 trace!("ERROR : Handshake failed with {}", e);
@@ -157,9 +166,5 @@ impl Listener for WebSocketListener {
 
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.transport_cb_handler = Some(cb_handler)
-    }
-
-    fn set_executor_handle(&mut self, handle: TaskExecutor) {
-        self.executor_handle = Some(handle)
     }
 }

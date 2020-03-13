@@ -7,12 +7,12 @@ use std::{
     net::SocketAddr,
     time::{Duration, Instant},
 };
-use tokio::net::TcpStream;
 use crate::transport::{
     r#async::{Transport, CowFuture, CowSink, CowStream},
     uri::Uri,
     MessageInterceptor, TransportError,
 };
+use tokio_tcp::TcpStream;
 
 pub struct TcpTransport {
     stream: TcpStream,
