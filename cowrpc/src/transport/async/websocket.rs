@@ -332,7 +332,7 @@ impl CowMessageStream {
     fn check_ping(&mut self) -> Result<()> {
         if let Some(ref mut ping_utils) = self.ping_utils {
             if ping_utils.ping_sent >= 3 {
-                warn!("WS_PING sent {} times and no response received.", ping_utils.ping_sent);
+                debug!("WS_PING sent {} times and no response received.", ping_utils.ping_sent);
             }
 
             let mut expired_guard = ping_utils.ping_expired.lock();
