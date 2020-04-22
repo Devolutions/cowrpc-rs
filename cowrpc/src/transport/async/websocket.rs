@@ -368,7 +368,7 @@ impl CowMessageStream {
                         .write_message(WebSocketMessage::Ping(WS_PING_PAYLOAD.to_vec()));
                     match result {
                         Ok(_) => {
-                            debug!("WS_PING sent.");
+                            trace!("WS_PING sent.");
 
                             // Start another task to be wake up in 15 seconds and validate that we received the pong response.
                             let task_clone = task.clone();
@@ -495,7 +495,7 @@ impl Stream for CowMessageStream {
                     }
                     WebSocketMessage::Pong(_) | WebSocketMessage::Ping(_) => {
                         if let Some(ref mut ping_utils) = self.ping_utils {
-                            debug!("WS_PONG received.");
+                            trace!("WS_PONG received.");
                             *ping_utils.waiting_pong.lock() = false;
                         }
                         continue;
