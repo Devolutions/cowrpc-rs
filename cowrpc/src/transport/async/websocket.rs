@@ -503,8 +503,16 @@ impl Stream for CowMessageStream {
                     _ => return Err(crate::error::CowRpcError::Proto("Received malformed data on socket".into())),
                 },
                 Err(e) => {
-                    error!("ws.read_message returned error: {}", e);
-                    return Err(TransportError::ConnectionReset.into());
+                    match e {
+                        tungstenite::error::Error::ConnectionClosed(_) => {
+                            // WebSocket connection closed normally. The stream is terminated
+                            return Ok(Async::Ready(None));
+                        },
+                        _ => {
+                            error!("ws.read_message returned error: {}", e);
+                            return Err(TransportError::ConnectionReset.into());
+                        }
+                    }
                 }
             }
         }
