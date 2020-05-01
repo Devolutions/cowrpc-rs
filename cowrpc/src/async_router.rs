@@ -1180,42 +1180,8 @@ impl CowRpcRouterPeer {
     }
 
     fn process_identify_req(&mut self, _: CowRpcHdr, msg: CowRpcIdentityMsg) -> Result<()> {
-        let mut flag = CowRpcErrorCode::Success;
-        {
-            if self.identity.is_none() {
-                let identity = {
-                    // FIXME: This is a temporary fix until group identity are implemented, as discussed with fdubois
-                    if msg.identity.eq("den") {
-                        format!("den{}", self.router.inner.id)
-                    } else {
-                        msg.identity.clone()
-                    }
-                    // FIXME: End
-                };
-
-                let identity = CowRpcIdentity {
-                    typ: msg.typ.clone(),
-                    name: identity.clone(),
-                };
-                let cache = &self.router.inner.cache;
-                let cow_id = self.inner.cow_id;
-                match cache.add_cow_identity(&identity, cow_id) {
-                    Ok(_) => {
-                        self.identity = Some(identity);
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Unable to add Identity {} the the router cache : {:?}",
-                            identity.name, e
-                        );
-                        flag = CowRpcErrorCode::Unavailable;
-                    }
-                }
-            } else {
-                flag = CowRpcErrorCode::Proto;
-            }
-        }
-
+        // Identify is not supported, verify has to be used.
+        let flag = CowRpcErrorCode::Unauthorized;
         self.send_identify_rsp(flag.into(), msg)?;
         Ok(())
     }
@@ -1230,7 +1196,13 @@ impl CowRpcRouterPeer {
 
         let mut flag = CowRpcErrorCode::Success;
         {
-            if let Some(identity) = identity_opt {
+            if let Some(mut identity) = identity_opt {
+                // den is a special case. Only one peer should be identified with den. Nobody should be able
+                // to request the den identity (except the den itself of course) since a pop-token has been validated.
+                if identity.eq("den") {
+                    identity = format!("den{}", self.router.inner.id)
+                }
+
                 let identity = CowRpcIdentity {
                     typ: CowRpcIdentityType::UPN,
                     name: identity.clone(),
