@@ -46,7 +46,7 @@ pub const ALLOCATED_COW_ID_SET: &str = "allocated_cow_id";
 pub const COW_ID_RECORDS: &str = "cow_address_records";
 pub const IDENTITY_RECORDS: &str = "identities_records";
 
-type IdentityVerificationCallback = dyn Fn(&[u8]) -> (Vec<u8>, Option<String>) + Send + Sync;
+type IdentityVerificationCallback = dyn Fn(u32, &[u8]) -> (Vec<u8>, Option<String>) + Send + Sync;
 type PeerConnectionCallback = dyn Fn(u32) -> () + Send + Sync;
 type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> () + Send + Sync;
 
@@ -112,7 +112,7 @@ impl CowRpcRouter {
         *cb = Some(Box::new(callback));
     }
 
-    pub fn verify_identity_callback<F: 'static + Fn(&[u8]) -> (Vec<u8>, Option<String>) + Send + Sync>(&mut self, callback: F) {
+    pub fn verify_identity_callback<F: 'static + Fn(u32, &[u8]) -> (Vec<u8>, Option<String>) + Send + Sync>(&mut self, callback: F) {
         let mut cb = self.shared.inner.verify_identity_cb.write();
         *cb = Some(Box::new(callback));
     }
@@ -1189,7 +1189,7 @@ impl CowRpcRouterPeer {
     fn process_verify_req(&mut self, _: CowRpcHdr, msg: CowRpcVerifyMsg, payload: &[u8]) -> Result<()> {
 
         let (rsp, identity_opt) = if let Some(ref cb) = *self.router.inner.verify_identity_cb.read() {
-            (**cb)(payload)
+            (**cb)(self.inner.cow_id, payload)
         } else {
             (b"HTTP/1.1 501 NOT IMPLEMENTED\r\n\r\n".to_vec(), None)
         };
