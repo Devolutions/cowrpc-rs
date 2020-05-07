@@ -14,7 +14,7 @@ use crate::proto::*;
 use rand;
 use crate::router::CowRpcIdentity;
 use std;
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 use crate::transport::{
     r#async::{ListenerBuilder, CowRpcTransport, Transport, CowSink, CowStream, adaptor::Adaptor},
     MessageInterceptor,
@@ -23,6 +23,8 @@ use crate::transport::{
 use crate::CowRpcMessageInterceptor;
 use futures_03::compat::Future01CompatExt;
 use futures_03::future::TryFutureExt;
+use futures_03::stream::StreamExt;
+use futures_03::future::BoxFuture;
 
 pub type RouterMonitor = Receiver<()>;
 
@@ -49,6 +51,7 @@ pub const IDENTITY_RECORDS: &str = "identities_records";
 type IdentityVerificationCallback = dyn Fn(u32, &[u8]) -> (Vec<u8>, Option<String>) + Send + Sync;
 type PeerConnectionCallback = dyn Fn(u32) -> () + Send + Sync;
 type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> () + Send + Sync;
+pub type PeersAreAliveCallback = dyn Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync;
 
 pub struct CowRpcRouter {
     listener_url: String,
@@ -57,6 +60,12 @@ pub struct CowRpcRouter {
     shared: RouterShared,
     adaptor: Adaptor,
     msg_interceptor: Option<Box<dyn MessageInterceptor>>,
+    peers_are_alive_task_info: Option<PeersAreAliveTaskInfo>,
+}
+
+struct PeersAreAliveTaskInfo {
+    callback: Box<PeersAreAliveCallback>,
+    interval: Duration,
 }
 
 impl CowRpcRouter {
@@ -70,6 +79,7 @@ impl CowRpcRouter {
             shared: RouterShared::new(id),
             adaptor: Adaptor::new(),
             msg_interceptor: None,
+            peers_are_alive_task_info: None,
         };
 
         let router_handle = RouterHandle::new(handle);
@@ -92,6 +102,7 @@ impl CowRpcRouter {
             shared: RouterShared::new2(router_id, cache),
             adaptor: Adaptor::new(),
             msg_interceptor: None,
+            peers_are_alive_task_info: None,
         };
 
         let router_handle = RouterHandle::new(handle);
@@ -130,6 +141,13 @@ impl CowRpcRouter {
         self.msg_interceptor = Some(Box::new(interceptor));
     }
 
+    pub fn set_peers_are_alive_callback<F: 'static + Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync>(&mut self, interval: Duration, callback: F) {
+        self.peers_are_alive_task_info = Some(PeersAreAliveTaskInfo {
+            callback: Box::new(callback),
+            interval
+        });
+    }
+
     pub fn get_msg_injector(&self) -> Adaptor {
         self.adaptor.clone()
     }
@@ -146,6 +164,7 @@ impl CowRpcRouter {
             shared,
             adaptor,
             msg_interceptor,
+            peers_are_alive_task_info,
         } = self;
 
         let router_shared_clone = shared.clone();
@@ -227,15 +246,27 @@ impl CowRpcRouter {
                 .compat(),
         );
 
+        if let Some(task_info) = peers_are_alive_task_info {
+            tokio::spawn(peers_are_alive_task(shared.inner.peer_senders.clone(), task_info));
+        }
+
         Ok(monitor)
     }
+}
+
+async fn peers_are_alive_task(peers: Arc<RwLock<HashMap<u32, CowRpcRouterPeerSender>>>, task_info: PeersAreAliveTaskInfo) {
+    let interval = tokio::time::interval(task_info.interval);
+    interval.for_each(|_| async {
+        let peers: Vec<u32> = peers.read().keys().map(|x| x.clone()).collect();
+        (task_info.callback)(&peers).await;
+    }).await;
 }
 
 struct Inner {
     id: u32,
     cache: RouterCache,
     ifaces: RouterIfaceCollection,
-    peer_senders: RwLock<HashMap<u32, CowRpcRouterPeerSender>>,
+    peer_senders: Arc<RwLock<HashMap<u32, CowRpcRouterPeerSender>>>,
     multi_router_peer: RwLock<Option<CowRpcRouterPeerSender>>,
     verify_identity_cb: RwLock<Option<Box<IdentityVerificationCallback>>>,
     on_peer_connection_callback: RwLock<Option<Box<PeerConnectionCallback>>>,
@@ -248,7 +279,7 @@ impl Inner {
         Inner {
             id,
             cache: RouterCache::new(cache.clone()),
-            peer_senders: RwLock::new(HashMap::new()),
+            peer_senders: Arc::new(RwLock::new(HashMap::new())),
             ifaces: RouterIfaceCollection::new(cache),
             verify_identity_cb: RwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
@@ -261,7 +292,7 @@ impl Inner {
         Inner {
             id,
             cache: RouterCache::new(cache.clone()),
-            peer_senders: RwLock::new(HashMap::new()),
+            peer_senders: Arc::new(RwLock::new(HashMap::new())),
             ifaces: RouterIfaceCollection::new(cache),
             verify_identity_cb: RwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
@@ -820,7 +851,7 @@ impl Future for CowRpcRouterPeerHandshake {
 
                             let router = self.router.clone();
                             let cache_clone = self.router.inner.cache.get_raw_cache().clone();
-                            let mut transport = self.transport.clone();
+                            let transport = &mut self.transport;
                             let reader_stream = transport.message_stream();
                             let writer_sink = transport.message_sink();
                             let inner = Arc::new(CowRpcRouterPeerSharedInner {
@@ -849,7 +880,7 @@ impl Future for CowRpcRouterPeerHandshake {
                             let (mut peer, peer_sender) = {
                                 let router = self.router.clone();
                                 let cache_clone = self.router.inner.cache.get_raw_cache().clone();
-                                let mut transport = self.transport.clone();
+                                let transport = &mut self.transport;
                                 let reader_stream = transport.message_stream();
                                 let writer_sink = transport.message_sink();
                                 let peer_id = self.generate_peer_id();
