@@ -214,8 +214,8 @@ impl CowRpcListener {
 
 pub trait Transport {
     fn connect(uri: Uri) -> CowFuture<Self>
-    where
-        Self: Sized;
+        where
+            Self: Sized;
     fn message_sink(&mut self) -> CowSink<CowRpcMessage>;
     fn message_stream(&mut self) -> CowStream<CowRpcMessage>;
     fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
