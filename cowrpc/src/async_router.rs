@@ -1,13 +1,10 @@
 use super::{CowRpcIdentityType, CowRpcMessage};
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
-use futures::{
-    future::ok, future::err,
-    sync::oneshot::{channel, Receiver, Sender},
-    Async, Future, Stream,
-};
+use futures::{future::ok, future::err, sync::oneshot::{channel, Receiver, Sender}, Async, Future, Stream};
 use mouscache;
 use mouscache::Cache;
 use mouscache::CacheFunc;
+use tokio::sync::RwLock as TokioRwLock;
 use parking_lot::{Mutex, RwLock};
 use crate::proto;
 use crate::proto::*;
@@ -21,8 +18,8 @@ use crate::transport::{
     tls::TlsOptions,
 };
 use crate::CowRpcMessageInterceptor;
-use futures_03::compat::Future01CompatExt;
-use futures_03::future::TryFutureExt;
+use futures_03::compat::{Future01CompatExt, Compat};
+use futures_03::future::{TryFutureExt, FutureExt};
 use futures_03::stream::StreamExt;
 use futures_03::future::BoxFuture;
 
@@ -48,9 +45,9 @@ pub const ALLOCATED_COW_ID_SET: &str = "allocated_cow_id";
 pub const COW_ID_RECORDS: &str = "cow_address_records";
 pub const IDENTITY_RECORDS: &str = "identities_records";
 
-type IdentityVerificationCallback = dyn Fn(u32, &[u8]) -> (Vec<u8>, Option<String>) + Send + Sync;
+type IdentityVerificationCallback = dyn Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>, Option<String>)> + Send + Sync;
 type PeerConnectionCallback = dyn Fn(u32) -> () + Send + Sync;
-type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> () + Send + Sync;
+type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> BoxFuture<'static, ()> + Send + Sync;
 pub type PeersAreAliveCallback = dyn Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync;
 
 pub struct CowRpcRouter {
@@ -115,16 +112,16 @@ impl CowRpcRouter {
         *cb = Some(Box::new(callback));
     }
 
-    pub fn on_peer_disconnection_callback<F: 'static + Fn(u32, Option<CowRpcIdentity>) + Send + Sync>(
+    pub async fn on_peer_disconnection_callback<F: 'static + Fn(u32, Option<CowRpcIdentity>) -> BoxFuture<'static, ()> + Send + Sync>(
         &mut self,
         callback: F,
     ) {
-        let mut cb = self.shared.inner.on_peer_disconnection_callback.write();
+        let mut cb = self.shared.inner.on_peer_disconnection_callback.write().await;
         *cb = Some(Box::new(callback));
     }
 
-    pub fn verify_identity_callback<F: 'static + Fn(u32, &[u8]) -> (Vec<u8>, Option<String>) + Send + Sync>(&mut self, callback: F) {
-        let mut cb = self.shared.inner.verify_identity_cb.write();
+    pub async fn verify_identity_callback<F: 'static + Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>, Option<String>)> + Send + Sync>(&mut self, callback: F) {
+        let mut cb = self.shared.inner.verify_identity_cb.write().await;
         *cb = Some(Box::new(callback));
     }
 
@@ -202,7 +199,6 @@ impl CowRpcRouter {
 
             let peer_router_shared = router_shared_clone.clone();
             let router_cleanup_clone = router_shared_clone.clone();
-            let router_error_clone = router_shared_clone.clone();
             let peer_fut = peer_handshake
                 .and_then(move |(peer, peer_sender)| {
                     {
@@ -217,13 +213,14 @@ impl CowRpcRouter {
                         }
                     }
 
-                    peer.map(move |(peer_id, identity)| {
-                        router_cleanup_clone.clean_up_connection(peer_id, identity);
-                    }).map_err(move |(peer_id, identity, error)| {
+                    peer.or_else(|(peer_id, identity, error)| {
                         error!("Got an error while polling peer {:#010X} : {:?}", peer_id, error);
-                        router_error_clone.clean_up_connection(peer_id, identity);
-                        error
+                        ok((peer_id, identity))
+                    }).and_then(move |(peer_id, identity)| {
+                        router_cleanup_clone.clean_up_connection(peer_id, identity).unit_error().boxed().compat()
+                            .map_err(|_|CowRpcError::Internal("Should not happen".to_string()))
                     })
+
                 }).map_err(|e| {
                 trace!("{:?}", e);
             });
@@ -268,9 +265,9 @@ struct Inner {
     ifaces: RouterIfaceCollection,
     peer_senders: Arc<RwLock<HashMap<u32, CowRpcRouterPeerSender>>>,
     multi_router_peer: RwLock<Option<CowRpcRouterPeerSender>>,
-    verify_identity_cb: RwLock<Option<Box<IdentityVerificationCallback>>>,
+    verify_identity_cb: TokioRwLock<Option<Box<IdentityVerificationCallback>>>,
     on_peer_connection_callback: RwLock<Option<Box<PeerConnectionCallback>>>,
-    on_peer_disconnection_callback: RwLock<Option<Box<PeerDisconnectionCallback>>>,
+    on_peer_disconnection_callback: TokioRwLock<Option<Box<PeerDisconnectionCallback>>>,
 }
 
 impl Inner {
@@ -281,10 +278,10 @@ impl Inner {
             cache: RouterCache::new(cache.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
             ifaces: RouterIfaceCollection::new(cache),
-            verify_identity_cb: RwLock::new(None),
+            verify_identity_cb: TokioRwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
             multi_router_peer: RwLock::new(None),
-            on_peer_disconnection_callback: RwLock::new(None),
+            on_peer_disconnection_callback: TokioRwLock::new(None),
         }
     }
 
@@ -294,10 +291,10 @@ impl Inner {
             cache: RouterCache::new(cache.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
             ifaces: RouterIfaceCollection::new(cache),
-            verify_identity_cb: RwLock::new(None),
+            verify_identity_cb: TokioRwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
             multi_router_peer: RwLock::new(None),
-            on_peer_disconnection_callback: RwLock::new(None),
+            on_peer_disconnection_callback: TokioRwLock::new(None),
         }
     }
 }
@@ -345,14 +342,17 @@ impl RouterShared {
         self.inner.ifaces.add(iface_def)
     }
 
-    fn clean_up_connection(&self, peer_id: u32, peer_identity: Option<CowRpcIdentity>) {
-        let mut peers = self.inner.peer_senders.write();
+    async fn clean_up_connection(self, peer_id: u32, peer_identity: Option<CowRpcIdentity>) {
+        let peer = {
+            let mut peers = self.inner.peer_senders.write();
+            peers.remove(&peer_id)
+        };
 
         //Remove the peer and unbind all bind context between this peer and others
-        match peers.remove(&peer_id) {
+        match peer {
             Some(ref peer_ref) => {
-                if let Some(ref callback) = &*self.inner.on_peer_disconnection_callback.read() {
-                    callback(peer_id, peer_identity.clone());
+                if let Some(ref callback) = &*self.inner.on_peer_disconnection_callback.read().await {
+                    callback(peer_id, peer_identity.clone()).await;
                 }
 
                 self.clean_identity(peer_id, peer_identity);
@@ -370,6 +370,7 @@ impl RouterShared {
                                 } else {
                                     client_id
                                 };
+                                let mut peers = self.inner.peer_senders.write();
                                 if let Some(remote_ref) = peers.get_mut(&remote_id) {
                                     remote_ref.send_unbind_req(client_id, server_id, iface_id);
                                     {
@@ -864,8 +865,9 @@ impl Future for CowRpcRouterPeerHandshake {
                             let mut peer = CowRpcRouterPeer {
                                 inner: inner.clone(),
                                 identity: None,
-                                reader_stream,
+                                reader_stream: Arc::new(Mutex::new(reader_stream)),
                                 router,
+                                process_msg_fut: None,
                             };
 
                             peer.send_handshake_rsp(flag)?;
@@ -895,8 +897,9 @@ impl Future for CowRpcRouterPeerHandshake {
                                     CowRpcRouterPeer {
                                         inner: inner.clone(),
                                         identity: None,
-                                        reader_stream,
+                                        reader_stream: Arc::new(Mutex::new(reader_stream)),
                                         router,
+                                        process_msg_fut: None,
                                     },
                                     CowRpcRouterPeerSender { inner },
                                 )
@@ -934,8 +937,22 @@ pub struct CowRpcRouterPeerSharedInner {
 pub struct CowRpcRouterPeer {
     inner: Arc<CowRpcRouterPeerSharedInner>,
     identity: Option<CowRpcIdentity>,
-    reader_stream: CowStream<CowRpcMessage>,
+    reader_stream: Arc<Mutex<CowStream<CowRpcMessage>>>,
     router: RouterShared,
+
+    process_msg_fut: Option<Compat<BoxFuture<'static, Result<()>>>>,
+}
+
+impl Clone for CowRpcRouterPeer {
+    fn clone(&self) -> Self {
+        CowRpcRouterPeer {
+            inner: self.inner.clone(),
+            identity: self.identity.clone(),
+            reader_stream: self.reader_stream.clone(),
+            router: self.router.clone(),
+            process_msg_fut: None,
+        }
+    }
 }
 
 pub struct CowRpcRouterPeerSender {
@@ -1077,19 +1094,41 @@ impl Future for CowRpcRouterPeer {
 
     fn poll(&mut self) -> std::result::Result<Async<<Self as Future>::Item>, <Self as Future>::Error> {
         loop {
-            match self.reader_stream.poll() {
-                Ok(Async::Ready(Some(msg))) => {
-                    self.process_msg(msg)
-                        .map_err(|e| (self.inner.cow_id, self.identity.clone(), e))?;
+            match self.process_msg_fut.take() {
+                Some(mut fut) => {
+                   match fut.poll() {
+                       Ok(Async::NotReady) => {
+                           self.process_msg_fut = Some(fut);
+                           return Ok(Async::NotReady);
+                       }
+                       Err(e) => {
+                           return Err((self.inner.cow_id, self.identity.clone(), e));
+                       }
+                       _ => {}
+
+                   }
                 }
-                Ok(Async::NotReady) => {
-                    break; // nothing to do with that
-                }
-                Ok(Async::Ready(None)) => {
-                    return Ok(Async::Ready((self.inner.cow_id, self.identity.clone()))); // means the transport is disconnected
-                }
-                Err(e) => {
-                    return Err((self.inner.cow_id, self.identity.clone(), e));
+                None => {
+                    let res = {
+                        let mut lock = self.reader_stream. lock();
+                        lock.poll()
+                    };
+                    match res {
+                        Ok(Async::Ready(Some(msg))) => {
+                            let peer = self.clone();
+                            self.process_msg_fut = Some(Compat::new(Box::pin(CowRpcRouterPeer::process_msg(peer, msg))));
+                            self.poll().map_err(|(_, _, e)| (self.inner.cow_id, self.identity.clone(), e))?;
+                        }
+                        Ok(Async::NotReady) => {
+                            break; // nothing to do with that
+                        }
+                        Ok(Async::Ready(None)) => {
+                            return Ok(Async::Ready((self.inner.cow_id, self.identity.clone()))); // means the transport is disconnected
+                        }
+                        Err(e) => {
+                            return Err((self.inner.cow_id, self.identity.clone(), e));
+                        }
+                    }
                 }
             }
         }
@@ -1131,7 +1170,7 @@ impl CowRpcRouterPeer {
         }
     }
 
-    fn process_msg(&mut self, msg: CowRpcMessage) -> Result<()> {
+    async fn process_msg(mut self, msg: CowRpcMessage) -> Result<()> {
         match msg {
             CowRpcMessage::Handshake(hdr, msg) => {
                 error!(
@@ -1182,7 +1221,7 @@ impl CowRpcRouterPeer {
 
             CowRpcMessage::Verify(hdr, msg, payload) => {
                 if !hdr.is_response() {
-                    self.process_verify_req(hdr, msg, &payload)?;
+                    self.process_verify_req(hdr, msg, &payload).await?;
                 } else {
                     error!("CowRpc Protocol Error: Router can't process a response: hdr={:?}", hdr);
                 }
@@ -1217,10 +1256,10 @@ impl CowRpcRouterPeer {
         Ok(())
     }
 
-    fn process_verify_req(&mut self, _: CowRpcHdr, msg: CowRpcVerifyMsg, payload: &[u8]) -> Result<()> {
+    async fn process_verify_req(&mut self, _: CowRpcHdr, msg: CowRpcVerifyMsg, payload: &[u8]) -> Result<()> {
 
-        let (rsp, identity_opt) = if let Some(ref cb) = *self.router.inner.verify_identity_cb.read() {
-            (**cb)(self.inner.cow_id, payload)
+        let (rsp, identity_opt) = if let Some(ref cb) = *self.router.inner.verify_identity_cb.read().await {
+            (**cb)(self.inner.cow_id, payload).await
         } else {
             (b"HTTP/1.1 501 NOT IMPLEMENTED\r\n\r\n".to_vec(), None)
         };
