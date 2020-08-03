@@ -21,7 +21,7 @@ timer = "0.2"
 time = "0.1"
 url = "1.7"
 rand = "0.4"
-mouscache = "^0.5.4"
+mouscache = { git = "https://github.com/Devolutions/mouscache-rs", branch = "error_msg_improvement" }
 mouscache_derive = "0.4"
 futures = "0.1.29"
 futures_03 = { package = "futures", version = "0.3", features = ["compat"] }
