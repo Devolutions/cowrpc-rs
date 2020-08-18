@@ -53,11 +53,11 @@ struct CowRpcPeerSharedInner {
 
 impl CowRpcPeerSharedInner {
     fn get_id(&self) -> u32 {
-        return *self.id.read();
+        *self.id.read()
     }
 
     fn get_router_id(&self) -> u32 {
-        return *self.router_id.read();
+        *self.router_id.read()
     }
 
     fn set_id(&self, id: u32) {
@@ -69,7 +69,7 @@ impl CowRpcPeerSharedInner {
     }
 
     fn get_state(&self) -> CowRpcState {
-        return *self.state.read();
+        *self.state.read()
     }
 
     fn transition_to_state(&self, new_state: CowRpcState) {
@@ -86,7 +86,8 @@ impl CowRpcPeerSharedInner {
                 return Some(iface_mutex.clone());
             }
         }
-        return None;
+
+        None
     }
 
     fn register_iface_def(&self, iface_def: &mut CowRpcIfaceDef, server: bool) -> Result<()> {
@@ -287,7 +288,7 @@ impl CowRpcPeerAsyncMsgProcessor {
 
                     ok::<(), CowRpcError>(())
                 } else {
-                    return err(CowRpcError::Internal(format!("Unable to find the matching request")));
+                    err(CowRpcError::Internal(format!("Unable to find the matching request")))
                 }
             }),
         ) as CowFuture<()>
@@ -330,7 +331,7 @@ impl CowRpcPeerAsyncMsgProcessor {
 
                     ok::<(), CowRpcError>(())
                 } else {
-                    return err(CowRpcError::Internal(format!("Unable to find the matching request")));
+                    err(CowRpcError::Internal(format!("Unable to find the matching request")))
                 }
             }),
         ) as CowFuture<()>
@@ -368,7 +369,7 @@ impl CowRpcPeerAsyncMsgProcessor {
 
                     ok::<(), CowRpcError>(())
                 } else {
-                    return err(CowRpcError::Internal(format!("Unable to find the matching request")));
+                    err(CowRpcError::Internal(format!("Unable to find the matching request")))
                 }
             }),
         ) as CowFuture<()>
@@ -432,21 +433,20 @@ impl CowRpcPeerAsyncMsgProcessor {
                                         e
                                     )));
                                 }
-                            } else {
-                                if let Err(e) = resolve_req
-                                    .tx
-                                    .take()
-                                    .expect("Cannot Send twice on request oneshot channel")
-                                    .send(CowRpcAsyncResolveRsp {
-                                        node_id: Some(msg.node_id),
-                                        name: None,
-                                        error: CowRpcErrorCode::from(header.flags),
-                                    }) {
-                                    return err(CowRpcError::Internal(format!(
-                                        "Unable to send response through futures oneshot channel: {:?}",
-                                        e
-                                    )));
-                                }
+                            } else if let Err(e) = resolve_req
+                                .tx
+                                .take()
+                                .expect("Cannot Send twice on request oneshot channel")
+                                .send(CowRpcAsyncResolveRsp {
+                                    node_id: Some(msg.node_id),
+                                    name: None,
+                                    error: CowRpcErrorCode::from(header.flags),
+                                })
+                            {
+                                return err(CowRpcError::Internal(format!(
+                                    "Unable to send response through futures oneshot channel: {:?}",
+                                    e
+                                )));
                             }
                         }
                         _ => unreachable!(),
@@ -489,7 +489,7 @@ impl CowRpcPeerAsyncMsgProcessor {
                                 .tx
                                 .take()
                                 .expect("Cannot Send twice on request oneshot channel")
-                                .send(CowRpcAsyncBindRsp { error: error })
+                                .send(CowRpcAsyncBindRsp { error })
                                 {
                                     return err(CowRpcError::Internal(format!(
                                         "Unable to send response through futures oneshot channel: {:?}",
@@ -736,7 +736,7 @@ impl CowRpcPeerAsyncMsgProcessor {
             msg_type: proto::COW_RPC_BIND_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flags,
             src_id: self.inner.get_id(),
-            dst_id: dst_id,
+            dst_id,
             ..Default::default()
         };
 
