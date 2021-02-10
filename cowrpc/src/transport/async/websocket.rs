@@ -164,6 +164,7 @@ struct ServerWebSocketPingUtils {
     ping_expired: Arc<Mutex<bool>>,
     waiting_pong: Arc<Mutex<bool>>,
     send_ping_error: Arc<Mutex<Option<TransportError>>>,
+    ping_interval: Option<Duration>,
 }
 
 pub struct WebSocketTransport {
@@ -207,6 +208,7 @@ impl WebSocketTransport {
                 send_ping: Arc::new(Mutex::new(true)),
                 waiting_pong: Arc::new(Mutex::new(false)),
                 send_ping_error: Arc::new(Mutex::new(None)),
+                ping_interval: None,
             }),
         }
     }
@@ -310,6 +312,12 @@ impl Transport for WebSocketTransport {
         self.callback_handler = Some(cb_handler);
     }
 
+    fn set_keep_alive_interval(&mut self, interval: Option<Duration>) {
+        if let Some(ping_utils) = &mut self.ping_utils {
+            ping_utils.ping_interval = interval;
+        }
+    }
+
     fn local_addr(&self) -> Option<SocketAddr> {
         match self.stream.lock().get_ref() {
             StreamSwitcher::Plain(tcp_stream) => tcp_stream.local_addr().ok(),
@@ -355,58 +363,71 @@ impl CowMessageStream {
             if *send_ping {
                 *send_ping = false;
 
-                let ping_expired = ping_utils.ping_expired.clone();
-                let waiting_pong = ping_utils.waiting_pong.clone();
                 let send_ping_clone = ping_utils.send_ping.clone();
-                let send_ping_error = ping_utils.send_ping_error.clone();
-                let stream_clone = self.stream.clone();
+                let ping_interval = ping_utils.ping_interval.clone().unwrap_or(Duration::from_secs(PING_INTERVAL));
                 let task = task::current();
 
-                tokio::spawn(async move {
-                    let result = stream_clone
-                        .lock()
-                        .write_message(WebSocketMessage::Ping(WS_PING_PAYLOAD.to_vec()));
-                    match result {
-                        Ok(_) => {
-                            trace!("WS_PING sent.");
-                            *waiting_pong.lock() = true;
+                if *ping_utils.waiting_pong.lock() {
+                    trace!("Pong not received yet. Scheduling a new ping...");
+                    tokio::spawn(async move {
+                        let ping_delay = tokio::time::delay_until(tokio::time::Instant::now() + ping_interval);
+                        ping_delay.await;
+                        *send_ping_clone.lock() = true;
+                        task.notify();
+                        futures::finished::<(), ()>(())
+                    });
+                } else {
+                    let ping_expired = ping_utils.ping_expired.clone();
+                    let waiting_pong = ping_utils.waiting_pong.clone();
+                    let send_ping_error = ping_utils.send_ping_error.clone();
+                    let stream_clone = self.stream.clone();
 
-                            // Start another task to be wake up in 15 seconds and validate that we received the pong response.
-                            let task_clone = task.clone();
-                            tokio::spawn(async move {
-                                let timeout = tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_secs(PING_TIMEOUT));
-                                timeout.await;
-                                if *waiting_pong.lock() {
-                                    *ping_expired.lock() = true;
-                                    task_clone.notify();
-                                }
-                                futures::finished::<(), ()>(())
-                            });
+                    tokio::spawn(async move {
+                        let result = stream_clone
+                            .lock()
+                            .write_message(WebSocketMessage::Ping(WS_PING_PAYLOAD.to_vec()));
+                        match result {
+                            Ok(_) => {
+                                trace!("WS_PING sent.");
+                                *waiting_pong.lock() = true;
 
-                            // Wait 60 seconds and raise the flag to send another ping.
-                            let ping_interval = tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_secs(PING_INTERVAL));
-                            ping_interval.await;
-                            *send_ping_clone.lock() = true;
-                        }
-                        Err(e) => {
-                            debug!("Sending WS_PING failed: {}", e);
+                                // Start another task to be wake up in 15 seconds and validate that we received the pong response.
+                                let task_clone = task.clone();
+                                tokio::spawn(async move {
+                                    let timeout = tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_secs(PING_TIMEOUT));
+                                    timeout.await;
+                                    if *waiting_pong.lock() {
+                                        *ping_expired.lock() = true;
+                                        task_clone.notify();
+                                    }
+                                    futures::finished::<(), ()>(())
+                                });
 
-                            match e {
-                                ::tungstenite::Error::SendQueueFull(_) => {
-                                    *send_ping_clone.lock() = true;
-                                    warn!("WS_PING can't be send, queue is full.")
-                                }
-                                e => {
-                                    // Ping can't be sent. Keep the error to send this error back later.
-                                    *send_ping_error.lock() = Some(e.into());
+                                // Wait the interval and raise the flag to send another ping. If we still wait a pong response, we wait another interval
+                                let ping_delay = tokio::time::delay_until(tokio::time::Instant::now() + ping_interval);
+                                ping_delay.await;
+                                *send_ping_clone.lock() = true;
+                            }
+                            Err(e) => {
+                                debug!("Sending WS_PING failed: {}", e);
+
+                                match e {
+                                    ::tungstenite::Error::SendQueueFull(_) => {
+                                        *send_ping_clone.lock() = true;
+                                        warn!("WS_PING can't be send, queue is full.")
+                                    }
+                                    e => {
+                                        // Ping can't be sent. Keep the error to send this error back later.
+                                        *send_ping_error.lock() = Some(e.into());
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    task.notify();
-                    futures::finished::<(), ()>(())
-                });
+                        task.notify();
+                        futures::finished::<(), ()>(())
+                    });
+                }
             }
         }
 

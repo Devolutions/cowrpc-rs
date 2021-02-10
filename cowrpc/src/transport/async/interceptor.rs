@@ -42,6 +42,10 @@ impl Transport for InterceptorTransport {
         self.inter = cb_handler;
     }
 
+    fn set_keep_alive_interval(&mut self, _: Option<Duration>) {
+        // Not supported
+    }
+
     fn local_addr(&self) -> Option<SocketAddr> {
         None
     }

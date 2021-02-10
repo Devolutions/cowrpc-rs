@@ -108,6 +108,10 @@ impl Transport for TcpTransport {
         self.callback_handler = Some(cb_handler)
     }
 
+    fn set_keep_alive_interval(&mut self, _: Option<Duration>) {
+        // Not supported
+    }
+
     fn local_addr(&self) -> Option<SocketAddr> {
         self.stream.local_addr().ok()
     }

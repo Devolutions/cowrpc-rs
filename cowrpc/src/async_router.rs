@@ -58,6 +58,7 @@ pub struct CowRpcRouter {
     adaptor: Adaptor,
     msg_interceptor: Option<Box<dyn MessageInterceptor>>,
     peers_are_alive_task_info: Option<PeersAreAliveTaskInfo>,
+    keep_alive_interval: Option<Duration>,
 }
 
 struct PeersAreAliveTaskInfo {
@@ -77,6 +78,7 @@ impl CowRpcRouter {
             adaptor: Adaptor::new(),
             msg_interceptor: None,
             peers_are_alive_task_info: None,
+            keep_alive_interval: None,
         };
 
         let router_handle = RouterHandle::new(handle);
@@ -100,6 +102,7 @@ impl CowRpcRouter {
             adaptor: Adaptor::new(),
             msg_interceptor: None,
             peers_are_alive_task_info: None,
+            keep_alive_interval: None,
         };
 
         let router_handle = RouterHandle::new(handle);
@@ -123,6 +126,10 @@ impl CowRpcRouter {
     pub async fn verify_identity_callback<F: 'static + Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>, Option<String>)> + Send + Sync>(&mut self, callback: F) {
         let mut cb = self.shared.inner.verify_identity_cb.write().await;
         *cb = Some(Box::new(callback));
+    }
+
+    pub fn set_keep_alive_interval(&mut self, interval: Duration) {
+        self.keep_alive_interval = Some(interval);
     }
 
     pub fn set_msg_interceptor<T: 'static + Send + Sync + Clone>(&mut self, interceptor: CowRpcMessageInterceptor<T>) {
@@ -162,6 +169,7 @@ impl CowRpcRouter {
             adaptor,
             msg_interceptor,
             peers_are_alive_task_info,
+            keep_alive_interval,
         } = self;
 
         let router_shared_clone = shared.clone();
@@ -180,7 +188,10 @@ impl CowRpcRouter {
 
         let router_peer_stream = listener.incoming().for_each(move |stream_fut| {
             let router_shared_hand = router_shared_clone.clone();
-            let peer_handshake = stream_fut.and_then(move |stream| {
+            let keep_alive_interval_clone = keep_alive_interval.clone();
+
+            let peer_handshake = stream_fut.and_then(move |mut stream| {
+                stream.set_keep_alive_interval(keep_alive_interval_clone);
                 tokio::time::timeout(
                     std::time::Duration::from_secs(PEER_CONNECTION_GRACE_PERIOD),
                     CowRpcRouterPeer::handshake(stream, router_shared_hand.clone())

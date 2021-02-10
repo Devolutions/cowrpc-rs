@@ -219,6 +219,7 @@ pub trait Transport {
     fn message_sink(&mut self) -> CowSink<CowRpcMessage>;
     fn message_stream(&mut self) -> CowStream<CowRpcMessage>;
     fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
+    fn set_keep_alive_interval(&mut self, interval: Option<Duration>);
     fn local_addr(&self) -> Option<SocketAddr>;
     fn remote_addr(&self) -> Option<SocketAddr>;
     fn up_time(&self) -> Duration;
@@ -278,6 +279,14 @@ impl Transport for CowRpcTransport {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.set_message_interceptor(cb_handler),
             CowRpcTransport::WebSocket(ref mut ws) => ws.set_message_interceptor(cb_handler),
             CowRpcTransport::Interceptor(ref mut inter) => inter.set_message_interceptor(cb_handler),
+        }
+    }
+
+    fn set_keep_alive_interval(&mut self, interval: Option<Duration>) {
+        match self {
+            CowRpcTransport::Tcp(ref mut tcp) => tcp.set_keep_alive_interval(interval),
+            CowRpcTransport::WebSocket(ref mut ws) => ws.set_keep_alive_interval(interval),
+            CowRpcTransport::Interceptor(ref mut inter) => inter.set_keep_alive_interval(interval),
         }
     }
 
