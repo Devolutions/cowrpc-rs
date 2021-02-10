@@ -369,6 +369,7 @@ impl CowMessageStream {
                     match result {
                         Ok(_) => {
                             trace!("WS_PING sent.");
+                            *waiting_pong.lock() = true;
 
                             // Start another task to be wake up in 15 seconds and validate that we received the pong response.
                             let task_clone = task.clone();
