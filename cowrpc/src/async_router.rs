@@ -826,7 +826,7 @@ pub struct CowRpcRouterPeerSharedInner {
 
 pub struct CowRpcRouterPeer {
     inner: Arc<CowRpcRouterPeerSharedInner>,
-    identity: Option<CowRpcIdentity>,
+    identity: Arc<RwLock<Option<CowRpcIdentity>>>,
     reader_stream: Arc<Mutex<CowStream<CowRpcMessage>>>,
     router: RouterShared,
 
@@ -992,7 +992,7 @@ impl Future for CowRpcRouterPeer {
                            return Ok(Async::NotReady);
                        }
                        Err(e) => {
-                           return Err((self.inner.cow_id, self.identity.clone(), e));
+                           return Err((self.inner.cow_id, self.identity.read().clone(), e));
                        }
                        _ => {}
 
@@ -1007,16 +1007,16 @@ impl Future for CowRpcRouterPeer {
                         Ok(Async::Ready(Some(msg))) => {
                             let peer = self.clone();
                             self.process_msg_fut = Some(Compat::new(Box::pin(CowRpcRouterPeer::process_msg(peer, msg))));
-                            self.poll().map_err(|(_, _, e)| (self.inner.cow_id, self.identity.clone(), e))?;
+                            self.poll().map_err(|(_, _, e)| (self.inner.cow_id, self.identity.read().clone(), e))?;
                         }
                         Ok(Async::NotReady) => {
                             break; // nothing to do with that
                         }
                         Ok(Async::Ready(None)) => {
-                            return Ok(Async::Ready((self.inner.cow_id, self.identity.clone()))); // means the transport is disconnected
+                            return Ok(Async::Ready((self.inner.cow_id, self.identity.read().clone()))); // means the transport is disconnected
                         }
                         Err(e) => {
-                            return Err((self.inner.cow_id, self.identity.clone(), e));
+                            return Err((self.inner.cow_id, self.identity.read().clone(), e));
                         }
                     }
                 }
@@ -1027,19 +1027,19 @@ impl Future for CowRpcRouterPeer {
                 .writer_sink
                 .lock()
                 .poll_complete()
-                .map_err(|e| (self.inner.cow_id, self.identity.clone(), e))?;
+                .map_err(|e| (self.inner.cow_id, self.identity.read().clone(), e))?;
         }
         {
             match &*self.inner.state.read() {
                 CowRpcRouterPeerState::Error => {
                     return Err((
                         self.inner.cow_id,
-                        self.identity.clone(),
+                        self.identity.read().clone(),
                         CowRpcError::Internal("An error occured while polling the peer connection".to_string()),
                     ));
                 }
                 CowRpcRouterPeerState::Terminated => {
-                    return Ok(Async::Ready((self.inner.cow_id, self.identity.clone())));
+                    return Ok(Async::Ready((self.inner.cow_id, self.identity.read().clone())));
                 }
                 _ => {}
             }
@@ -1105,7 +1105,7 @@ impl CowRpcRouterPeer {
 
                             let mut peer = CowRpcRouterPeer {
                                 inner: inner.clone(),
-                                identity: None,
+                                identity: Arc::new(RwLock::new(None)),
                                 reader_stream: Arc::new(Mutex::new(reader_stream)),
                                 router,
                                 process_msg_fut: None,
@@ -1137,7 +1137,7 @@ impl CowRpcRouterPeer {
                                 (
                                     CowRpcRouterPeer {
                                         inner: inner.clone(),
-                                        identity: None,
+                                        identity: Arc::new(RwLock::new(None)),
                                         reader_stream: Arc::new(Mutex::new(reader_stream)),
                                         router,
                                         process_msg_fut: None,
@@ -1282,7 +1282,7 @@ impl CowRpcRouterPeer {
                 let cow_id = self.inner.cow_id;
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
-                        self.identity = Some(identity);
+                        *self.identity.write() = Some(identity);
                     }
                     Err(e) => {
                         warn!(
@@ -1473,44 +1473,6 @@ impl CowRpcRouterPeer {
 
     fn send_messages(&mut self, msg: CowRpcMessage) -> Result<()> {
         self.inner.writer_sink.lock().start_send(msg).map(|_| ())
-    }
-
-    pub fn clean_identity(&mut self) {
-        let peer_cow_id = self.inner.cow_id;
-
-        if let Some(ref identity) = self.identity {
-            let res = match self.router.inner.cache.get_cow_identity_peer_addr(identity) {
-                Ok(opt_cow_id) => {
-                    if let Some(cow_id) = opt_cow_id {
-                        if cow_id == peer_cow_id {
-                            self.router.inner.cache.remove_cow_identity(identity, peer_cow_id)
-                        } else {
-                            Err(CowRpcError::Internal(format!(
-                                "Identity {} already belongs to another peer {}",
-                                identity.name, cow_id
-                            )))
-                        }
-                    } else {
-                        self.router.inner.cache.remove_cow_identity(identity, peer_cow_id)
-                    }
-                }
-                Err(e) => Err(e),
-            };
-
-            match res {
-                Ok(_) => {
-                    debug!("Identity {} removed", identity.name);
-                }
-                Err(e) => {
-                    warn!(
-                        "Unable to remove identity record {}, got error: {:?}",
-                        &identity.name, e
-                    );
-                }
-            }
-        }
-
-        self.identity = None;
     }
 }
 
