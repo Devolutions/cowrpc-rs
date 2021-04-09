@@ -6,7 +6,7 @@ use futures::{
 use std::net::SocketAddr;
 use tokio_tcp::TcpListener as TcpTokioListener;
 use crate::transport::{
-    r#async::{Listener, CowFuture, CowStream, tcp::TcpTransport},
+    r#async::{Listener, CowFuture, CowStream, set_socket_option, tcp::TcpTransport},
     MessageInterceptor,
     tls::TlsOptions,
 };
@@ -42,6 +42,8 @@ impl Listener for TcpListener {
             transport_cb_handler,
         } = self;
         Box::new(listener.incoming().map_err(|e| e.into()).map(move |stream| {
+            set_socket_option(&stream);
+
             let cbh = if let Some(ref cbh) = transport_cb_handler {
                 Some(cbh.clone_boxed())
             } else {

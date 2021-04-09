@@ -18,7 +18,7 @@ use futures_03::future::TryFutureExt;
 
 use crate::error::{CowRpcError, Result};
 use crate::transport::{
-    r#async::{Listener, CowFuture, CowStream, websocket::{ServerWebSocketHandshake, TlsHandshake, WebSocketTransport}},
+    r#async::{Listener, CowFuture, CowStream, set_socket_option, websocket::{ServerWebSocketHandshake, TlsHandshake, WebSocketTransport}},
     MessageInterceptor, TransportError,
     tls::{Identity, TlsOptions, TlsOptionsType},
 };
@@ -91,6 +91,8 @@ impl Listener for WebSocketListener {
         let WebSocketListener { listener, tls_acceptor, transport_cb_handler } = self;
 
         Box::new(listener.incoming().map_err(|e| e.into()).map(move |tcp_stream| {
+            set_socket_option(&tcp_stream);
+
             let tls_acceptor_clone = match tls_acceptor {
                 None => None,
                 Some(ref acceptor) => Some(NativeTlsAcceptor(acceptor.0.clone()))
