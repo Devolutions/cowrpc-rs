@@ -13,7 +13,7 @@ use crate::router::CowRpcIdentity;
 use std;
 use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 use crate::transport::{
-    r#async::{ListenerBuilder, CowRpcTransport, Transport, CowSink, CowStream, adaptor::Adaptor},
+    r#async::{ListenerBuilder, CowRpcTransport, Transport, CowSink, CowStreamEx, adaptor::Adaptor},
     MessageInterceptor,
     tls::TlsOptions,
 };
@@ -827,7 +827,7 @@ pub struct CowRpcRouterPeerSharedInner {
 pub struct CowRpcRouterPeer {
     inner: Arc<CowRpcRouterPeerSharedInner>,
     identity: Arc<RwLock<Option<CowRpcIdentity>>>,
-    reader_stream: Arc<Mutex<CowStream<CowRpcMessage>>>,
+    reader_stream: Arc<Mutex<CowStreamEx<CowRpcMessage>>>,
     router: RouterShared,
 
     process_msg_fut: Option<Compat<BoxFuture<'static, Result<()>>>>,
@@ -1270,7 +1270,8 @@ impl CowRpcRouterPeer {
                 // den is a special case. Only one peer should be identified with den. Nobody should be able
                 // to request the den identity (except the den itself of course) since a pop-token has been validated.
                 if identity.eq("den") {
-                    identity = format!("den{}", self.router.inner.id)
+                    identity = format!("den{}", self.router.inner.id);
+                    self.reader_stream.lock().close_on_keep_alive_timeout(false);
                 }
 
                 let identity = CowRpcIdentity {

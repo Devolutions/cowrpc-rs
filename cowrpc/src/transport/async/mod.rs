@@ -20,6 +20,11 @@ pub type CowFuture<T> = Box<dyn Future<Item = T, Error = CowRpcError> + Send>;
 pub type CowStream<T> = Box<dyn Stream<Item = T, Error = CowRpcError> + Send>;
 pub type CowSink<T> = Box<dyn Sink<SinkItem = T, SinkError = CowRpcError> + Send>;
 
+pub type CowStreamEx<T> = Box<dyn StreamEx<Item = T, Error = CowRpcError> + Send>;
+pub trait StreamEx: Stream + Send {
+    fn close_on_keep_alive_timeout(&mut self, close: bool);
+}
+
 pub trait Listener {
     type TransportInstance: Transport;
 
@@ -218,7 +223,7 @@ pub trait Transport {
         where
             Self: Sized;
     fn message_sink(&mut self) -> CowSink<CowRpcMessage>;
-    fn message_stream(&mut self) -> CowStream<CowRpcMessage>;
+    fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage>;
     fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
     fn set_keep_alive_interval(&mut self, interval: Option<Duration>);
     fn local_addr(&self) -> Option<SocketAddr>;
@@ -267,7 +272,7 @@ impl Transport for CowRpcTransport {
         }
     }
 
-    fn message_stream(&mut self) -> CowStream<CowRpcMessage> {
+    fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage> {
         match self {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.message_stream(),
             CowRpcTransport::WebSocket(ref mut ws) => ws.message_stream(),

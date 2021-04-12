@@ -12,7 +12,7 @@ use std::sync::{
 };
 use std::time::Duration;
 use crate::transport::{
-    r#async::{CowRpcTransport, Transport, CowFuture, CowSink, CowStream},
+    r#async::{CowRpcTransport, Transport, CowFuture, CowSink, CowStreamEx},
     Uri,
 };
 use futures_03::compat::Future01CompatExt;
@@ -1123,7 +1123,7 @@ impl Future for CowRpcAsyncPeerSend {
 
 struct CowRpcAsyncPeer {
     inner: CowRpcPeerSharedInner,
-    reader_stream: CowStream<CowRpcMessage>,
+    reader_stream: CowStreamEx<CowRpcMessage>,
 }
 
 impl CowRpcAsyncPeer {
