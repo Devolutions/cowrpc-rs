@@ -7,7 +7,6 @@ use super::*;
 use crate::error::CowRpcError;
 use crate::CowRpcMessage;
 use crate::transport::tls::TlsOptions;
-use tokio_tcp::TcpStream;
 
 mod tcp;
 mod tcp_listener;
@@ -328,29 +327,5 @@ impl Clone for CowRpcTransport {
             CowRpcTransport::WebSocket(ref ws) => CowRpcTransport::WebSocket(ws.clone()),
             CowRpcTransport::Interceptor(ref inter) => CowRpcTransport::Interceptor(inter.clone()),
         }
-    }
-}
-
-
-// Default socket option
-
-const SOCKET_SEND_BUFFER_SIZE: usize = 0x7FFFF;
-const SOCKET_RECV_BUFFER_SIZE: usize = 0x7FFFF;
-
-fn set_socket_option(stream: &TcpStream) {
-    if let Err(e) = stream.set_nodelay(true) {
-        error!("set_nodelay on TcpStream failed: {}", e);
-    }
-
-    if let Err(e) = stream.set_keepalive(Some(Duration::from_secs(2))) {
-        error!("set_keepalive on TcpStream failed: {}", e);
-    }
-
-    if let Err(e) = stream.set_send_buffer_size(SOCKET_SEND_BUFFER_SIZE) {
-        error!("set_send_buffer_size on TcpStream failed: {}", e);
-    }
-
-    if let Err(e) = stream.set_recv_buffer_size(SOCKET_RECV_BUFFER_SIZE) {
-        error!("set_recv_buffer_size on TcpStream failed: {}", e);
     }
 }
