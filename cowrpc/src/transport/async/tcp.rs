@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 use crate::transport::{
-    r#async::{Transport, CowFuture, CowSink, CowStream},
+    r#async::{Transport, CowFuture, CowSink, CowStreamEx, StreamEx},
     uri::Uri,
     MessageInterceptor, TransportError,
 };
@@ -91,7 +91,7 @@ impl Transport for TcpTransport {
         })
     }
 
-    fn message_stream(&mut self) -> CowStream<CowRpcMessage> {
+    fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage> {
         let stream = self
             .stream
             .try_clone()
@@ -215,6 +215,12 @@ impl Stream for CowMessageStream {
                 }
             }
         }
+    }
+}
+
+impl StreamEx for CowMessageStream {
+    fn close_on_keep_alive_timeout(&mut self, _close: bool) {
+        // Nothing to do
     }
 }
 

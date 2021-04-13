@@ -4,7 +4,7 @@ use crate::proto::CowRpcMessage;
 use std::{net::SocketAddr, time::Duration};
 use crate::transport::uri::Uri;
 use crate::transport::{
-    r#async::{Transport, CowFuture, CowSink, CowStream},
+    r#async::{Transport, CowFuture, CowSink, CowStreamEx},
     MessageInterceptor, TransportError
 };
 
@@ -34,7 +34,7 @@ impl Transport for InterceptorTransport {
         })
     }
 
-    fn message_stream(&mut self) -> CowStream<CowRpcMessage> {
+    fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage> {
         unreachable!("Cannot call message_stream on the interceptor transport")
     }
 

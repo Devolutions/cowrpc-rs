@@ -6,11 +6,11 @@ use std::{
 
 use byteorder::{LittleEndian};
 use futures::{self, Async, AsyncSink, Future, Sink, Stream, task};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use tls_api::{HandshakeError as TlsHandshakeError, MidHandshakeTlsStream, TlsConnector, TlsConnectorBuilder, TlsStream};
 use tls_api_native_tls::TlsConnector as NativeTlsConnector;
 use crate::transport::{
-    r#async::{Transport, CowFuture, CowSink, CowStream},
+    r#async::{Transport, CowFuture, CowSink, CowStreamEx, StreamEx},
     uri::Uri,
     MessageInterceptor, TransportError, tls::TlsOptions,
 };
@@ -165,6 +165,7 @@ struct ServerWebSocketPingUtils {
     waiting_pong: Arc<Mutex<bool>>,
     send_ping_error: Arc<Mutex<Option<TransportError>>>,
     ping_interval: Option<Duration>,
+    close_on_ping_expired: Arc<RwLock<bool>>,
 }
 
 pub struct WebSocketTransport {
@@ -209,6 +210,7 @@ impl WebSocketTransport {
                 waiting_pong: Arc::new(Mutex::new(false)),
                 send_ping_error: Arc::new(Mutex::new(None)),
                 ping_interval: None,
+                close_on_ping_expired: Arc::new(RwLock::new(true)),
             }),
         }
     }
@@ -299,7 +301,7 @@ impl Transport for WebSocketTransport {
         })
     }
 
-    fn message_stream(&mut self) -> CowStream<CowRpcMessage> {
+    fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage> {
         Box::new(CowMessageStream {
             stream: self.stream.clone(),
             data_received: Vec::new(),
@@ -350,7 +352,11 @@ impl CowMessageStream {
 
             // Error if ping has expired
             if *ping_utils.ping_expired.lock() {
-                return Err(CowRpcError::Timeout);
+                if *ping_utils.close_on_ping_expired.read() {
+                    return Err(CowRpcError::Timeout);
+                } else {
+                    warn!("Pong not received, but keep the connection open");
+                }
             }
 
             // Error if last ping failed to be sent
@@ -537,6 +543,14 @@ impl Stream for CowMessageStream {
                     }
                 }
             }
+        }
+    }
+}
+
+impl StreamEx for CowMessageStream {
+    fn close_on_keep_alive_timeout(&mut self, close: bool) {
+        if let Some(ping_util) = &self.ping_utils {
+            *ping_util.close_on_ping_expired.write() = close
         }
     }
 }
