@@ -1,9 +1,7 @@
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::error::{CowRpcError, Result};
-use crate::router::CowRpcIdentity;
-use std;
-use std::io::{Read, Write};
 use crate::CowRpcIdentityType;
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use std::io::{Read, Write};
 
 pub const _COW_RPC_ERROR_MSG_ID: u8 = 0;
 pub const COW_RPC_HANDSHAKE_MSG_ID: u8 = 1;
@@ -97,24 +95,15 @@ impl CowRpcMessage {
     }
 
     pub fn is_unbind(&self) -> bool {
-        match self {
-            CowRpcMessage::Unbind(_, _) => true,
-            _ => false,
-        }
+        matches!(self, CowRpcMessage::Unbind(_, _))
     }
 
     pub fn is_handshake(&self) -> bool {
-        match self {
-            CowRpcMessage::Handshake(_, _) => true,
-            _ => false,
-        }
+        matches!(self, CowRpcMessage::Handshake(_, _))
     }
 
     pub fn is_register(&self) -> bool {
-        match self {
-            CowRpcMessage::Register(_, _) => true,
-            _ => false,
-        }
+        matches!(self, CowRpcMessage::Register(_, _))
     }
 
     pub fn get_msg_info(&self) -> String {
@@ -334,9 +323,7 @@ impl Message for CowRpcMessage {
                 reader.read_exact(&mut v)?;
                 Ok(CowRpcMessage::Result(header, msg, v))
             }
-            COW_RPC_TERMINATE_MSG_ID => {
-                Ok(CowRpcMessage::Terminate(header))
-            }
+            COW_RPC_TERMINATE_MSG_ID => Ok(CowRpcMessage::Terminate(header)),
             COW_RPC_VERIFY_MSG_ID => {
                 let msg = CowRpcVerifyMsg::read_from(&mut reader)?;
                 let mut v = vec![0u8; (header.size - u32::from(header.offset)) as usize];
@@ -710,9 +697,14 @@ impl Message for CowRpcIfaceDef {
     where
         Self: Sized,
     {
-        let mut iface = CowRpcIfaceDef::default();
-        iface.id = reader.read_u16::<LittleEndian>()?;
-        iface.flags = reader.read_u16::<LittleEndian>()?;
+        let id = reader.read_u16::<LittleEndian>()?;
+        let flags = reader.read_u16::<LittleEndian>()?;
+
+        let mut iface = CowRpcIfaceDef {
+            id,
+            flags,
+            ..Default::default()
+        };
 
         if iface.flags & COW_RPC_DEF_FLAG_NAMED != 0 {
             iface.name = String::read_from(reader)?;
@@ -779,10 +771,14 @@ impl Message for CowRpcProcDef {
     where
         Self: Sized,
     {
-        let mut procedure = CowRpcProcDef::default();
+        let id = reader.read_u16::<LittleEndian>()?;
+        let flags = reader.read_u16::<LittleEndian>()?;
 
-        procedure.id = reader.read_u16::<LittleEndian>()?;
-        procedure.flags = reader.read_u16::<LittleEndian>()?;
+        let mut procedure = CowRpcProcDef {
+            id,
+            flags,
+            ..Default::default()
+        };
 
         if procedure.flags & COW_RPC_DEF_FLAG_NAMED != 0 {
             procedure.name = String::read_from(reader)?;
@@ -865,7 +861,7 @@ impl Message for CowRpcIdentityType {
         Self: Sized,
     {
         let typ = reader.read_u8()?;
-        Ok(CowRpcIdentityType::try_from(typ)?)
+        CowRpcIdentityType::try_from(typ)
     }
 
     fn write_to<W: Write>(&self, writer: &mut W) -> Result<()> {
@@ -926,7 +922,7 @@ impl Message for CowRpcIdentityMsg {
 impl Default for CowRpcIdentityMsg {
     fn default() -> Self {
         CowRpcIdentityMsg {
-            typ: CowRpcIdentityType::UPN,
+            typ: CowRpcIdentityType::Upn,
             flags: 0,
             identity: String::new(),
         }
@@ -1065,8 +1061,8 @@ pub struct CowRpcVerifyMsg {
 
 impl Message for CowRpcVerifyMsg {
     fn read_from<R: Read>(reader: &mut R) -> Result<Self>
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         let msg = CowRpcVerifyMsg {
             call_id: reader.read_u32::<LittleEndian>()?,
@@ -1092,8 +1088,8 @@ pub struct CowRpcHttpMsg {
 
 impl Message for CowRpcHttpMsg {
     fn read_from<R: Read>(reader: &mut R) -> Result<Self>
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         let msg = CowRpcHttpMsg {
             call_id: reader.read_u32::<LittleEndian>()?,
@@ -1116,7 +1112,7 @@ impl Message for CowRpcHttpMsg {
 #[test]
 fn test_identity_serialize() {
     let s1 = CowRpcIdentityMsg {
-        typ: CowRpcIdentityType::SPN,
+        typ: CowRpcIdentityType::Spn,
         flags: 12345,
         identity: String::from("identity"),
     };
@@ -1137,7 +1133,7 @@ fn test_resolve_serialize() {
     let s1 = CowRpcResolveMsg {
         node_id: 999,
         identity: Some(CowRpcIdentityMsg {
-            typ: CowRpcIdentityType::SPN,
+            typ: CowRpcIdentityType::Spn,
             flags: 12345,
             identity: String::from("identity"),
         }),
@@ -1153,4 +1149,10 @@ fn test_resolve_serialize() {
 
     assert_eq!(s1, s2);
     assert_eq!(s1.get_size(flag), s2.get_size(flag));
+}
+
+#[derive(Cacheable, Debug, PartialEq, Eq, Clone)]
+pub struct CowRpcIdentity {
+    pub typ: CowRpcIdentityType,
+    pub name: String,
 }

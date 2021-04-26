@@ -1,10 +1,8 @@
-use mio_extras;
-use mouscache;
-use crate::proto;
 use crate::proto::*;
-use std;
-use std::fmt;
 use crate::transport;
+use crate::transport::TransportError;
+use std::fmt;
+use {mouscache, std};
 
 #[derive(Debug)]
 pub enum CowRpcError {
@@ -33,20 +31,7 @@ impl fmt::Display for CowRpcError {
     }
 }
 
-impl std::error::Error for CowRpcError {
-    fn description(&self) -> &str {
-        match self {
-            CowRpcError::Io(ref error) => error.description(),
-            CowRpcError::TimeoutMpsc(ref error) => error.description(),
-            CowRpcError::Internal(_) => "Internal error",
-            CowRpcError::Proto(_) => "Protocol error",
-            CowRpcError::CowRpcFailure(_) => "Flag failure",
-            CowRpcError::Cancel => "Operation cancelled",
-            CowRpcError::Timeout => "Operation timed out",
-            CowRpcError::Transport(ref error) => error.description(),
-        }
-    }
-}
+impl std::error::Error for CowRpcError {}
 
 impl From<transport::CowRpcTransportError> for CowRpcError {
     fn from(error: transport::CowRpcTransportError) -> CowRpcError {
@@ -72,15 +57,15 @@ impl From<std::sync::mpsc::TryRecvError> for CowRpcError {
     }
 }
 
-impl From<mio_extras::channel::SendError<proto::CowRpcMessage>> for CowRpcError {
-    fn from(error: mio_extras::channel::SendError<proto::CowRpcMessage>) -> Self {
-        CowRpcError::Internal(format!("mio_extras::channel::SendError: {}", error))
-    }
-}
-
 impl From<mouscache::CacheError> for CowRpcError {
     fn from(e: mouscache::CacheError) -> Self {
         CowRpcError::Internal(format!("mouscache::CacheError : {}", e))
+    }
+}
+
+impl From<async_tungstenite::tungstenite::error::Error> for CowRpcError {
+    fn from(e: async_tungstenite::tungstenite::error::Error) -> Self {
+        CowRpcError::Transport(TransportError::from(e))
     }
 }
 
@@ -125,9 +110,9 @@ pub enum CowRpcErrorCode {
     UnknownError, // Always the last one
 }
 
-impl Into<u16> for CowRpcErrorCode {
-    fn into(self) -> u16 {
-        let mut error_code: u16 = match self {
+impl From<CowRpcErrorCode> for u16 {
+    fn from(error: CowRpcErrorCode) -> Self {
+        let mut error_code: u16 = match error {
             CowRpcErrorCode::Success => 0,
             CowRpcErrorCode::Internal => 1,
             CowRpcErrorCode::Version => 2,
