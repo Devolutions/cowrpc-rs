@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use mio::net::TcpListener as MioTcpListener;
 use mio::{net::TcpStream, Evented, Poll, PollOpt, Ready, Token};
 use timer::Timer;
-use tungstenite::{
+use async_tungstenite::tungstenite::{
     handshake::server::{NoCallback, ServerHandshake},
     stream::Stream as StreamSwitcher,
 };

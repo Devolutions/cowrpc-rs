@@ -1,5 +1,5 @@
 use crate::error::{CowRpcError, Result};
-use futures::{Async, AsyncSink, Sink};
+use futures::prelude::*;
 use crate::proto::CowRpcMessage;
 use std::{net::SocketAddr, time::Duration};
 use crate::transport::uri::Uri;
@@ -7,6 +7,9 @@ use crate::transport::{
     r#async::{Transport, CowFuture, CowSink, CowStreamEx},
     MessageInterceptor, TransportError
 };
+use async_trait::async_trait;
+use std::task::{Context, Poll};
+use std::pin::Pin;
 
 pub struct InterceptorTransport {
     pub inter: Box<dyn MessageInterceptor>,
@@ -20,8 +23,9 @@ impl Clone for InterceptorTransport {
     }
 }
 
+#[async_trait]
 impl Transport for InterceptorTransport {
-    fn connect(_uri: Uri) -> CowFuture<Self>
+    async fn connect(_uri: Uri) -> Result<Self>
     where
         Self: Sized,
     {
@@ -63,11 +67,10 @@ struct InterceptorSink {
     inter: Box<dyn MessageInterceptor>,
 }
 
-impl Sink for InterceptorSink {
-    type SinkItem = CowRpcMessage;
-    type SinkError = CowRpcError;
+impl Sink<CowRpcMessage> for InterceptorSink {
+    type Error = CowRpcError;
 
-    fn start_send(&mut self, item: <Self as Sink>::SinkItem) -> Result<AsyncSink<<Self as Sink>::SinkItem>> {
+    fn start_send(self: Pin<&mut Self>, item: CowRpcMessage) -> Result<()> {
         if let Some(msg) = self.inter.before_send(item) {
             Err(TransportError::EndpointUnreachable(format!(
                 "Unable to send msg {} trought interceptor, peer {} is inside this router",
@@ -75,15 +78,19 @@ impl Sink for InterceptorSink {
                 msg.get_dst_id()
             )).into())
         } else {
-            Ok(AsyncSink::Ready)
+            Ok(())
         }
     }
 
-    fn poll_complete(&mut self) -> Result<Async<()>> {
-        Ok(Async::Ready(()))
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
-    fn close(&mut self) -> Result<Async<()>> {
-        Ok(Async::Ready(()))
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
     }
 }

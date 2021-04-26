@@ -11,12 +11,12 @@ use time::Duration;
 use timer::{Guard as TimerGuard, Timer};
 use tls_api::{HandshakeError as TlsHandshakeError, MidHandshakeTlsStream, TlsConnector, TlsConnectorBuilder, TlsStream};
 use tls_api_native_tls::TlsConnector as NativeTlsConnector;
-use tungstenite::handshake::{
+use async_tungstenite::tungstenite::handshake::{
     client::{ClientHandshake, Request},
     server::{NoCallback, ServerHandshake},
     HandshakeError, MidHandshake,
 };
-use tungstenite::{
+use async_tungstenite::tungstenite::{
     stream::{Mode, Stream as StreamSwitcher},
     Message as WebSocketMessage, WebSocket,
 };
@@ -289,7 +289,7 @@ impl Transport for WebSocketTransport {
                     if data_to_send.len() < WS_BIN_CHUNK_SIZE {
                         // Send all the data since it fits inside one chunk
                         match ws.write_message(WebSocketMessage::Binary(data_to_send)) {
-                            Err(::tungstenite::Error::SendQueueFull(ws_msg)) => {
+                            Err(::async_tungstenite::tungstenite::Error::SendQueueFull(ws_msg)) => {
                                 self.data_to_send.clear();
                                 self.data_to_send = ws_msg.into_data();
                                 return Ok(());
@@ -312,7 +312,7 @@ impl Transport for WebSocketTransport {
                                     return Ok(());
                                 }
                                 Ok(_n) => match ws.write_message(WebSocketMessage::Binary(chunk)) {
-                                    Err(::tungstenite::Error::SendQueueFull(ws_msg)) => {
+                                    Err(::async_tungstenite::tungstenite::Error::SendQueueFull(ws_msg)) => {
                                         let mut remains = ws_msg.into_data();
                                         remains.extend_from_slice(
                                             &self.data_to_send.split_off(cursor.position() as usize),
@@ -450,7 +450,7 @@ impl Transport for WebSocketTransport {
                 if let WebSocketInner::WebSocket(ref mut ws) = *inner {
                     loop {
                         match ws.read_message() {
-                            Err(::tungstenite::Error::Io(e)) => {
+                            Err(::async_tungstenite::tungstenite::Error::Io(e)) => {
                                 if let ::std::io::ErrorKind::WouldBlock = e.kind() {
                                     return Ok(());
                                 } else {
@@ -467,7 +467,7 @@ impl Transport for WebSocketTransport {
                                     return Err(crate::error::CowRpcError::Proto("Received malformed data on socket".into()))
                                 }
                             },
-                            Err(::tungstenite::Error::ConnectionClosed(_)) => {
+                            Err(::async_tungstenite::tungstenite::Error::ConnectionClosed) => {
                                 return Err(TransportError::ConnectionReset.into());
                             }
                             e => {

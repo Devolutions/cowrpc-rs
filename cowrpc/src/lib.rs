@@ -2,8 +2,9 @@ extern crate bufstream;
 extern crate byteorder;
 extern crate bytes;
 extern crate dns_lookup;
-extern crate mio;
-extern crate mio_extras;
+//TODO FD REMOVE
+//extern crate mio;
+//extern crate mio_extras;
 extern crate rmp;
 extern crate url;
 #[macro_use]
@@ -20,21 +21,25 @@ extern crate timer;
 extern crate tls_api;
 extern crate tls_api_native_tls;
 extern crate tokio;
-extern crate tokio_tcp;
-extern crate tungstenite;
+//todo fd remove
+//extern crate tokio_tcp;
+//extern crate tungstenite;
 
 use std::io::prelude::*;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
-
+use async_trait::async_trait;
 use futures::Future;
-use futures::sync::oneshot::Sender as AsyncSender;
-use mio::{Events, Poll, PollOpt, Ready, Token};
-use mio_extras::channel::Sender;
-use parking_lot::{Mutex, RwLock};
-
+//use futures_01::sync::oneshot::Sender as AsyncSender;
+use futures::channel::oneshot::Sender as AsyncSender;
+//TODO FD REMOVE
+//use mio::{Events, Poll, PollOpt, Ready, Token};
+//use mio_extras::channel::Sender;
+use futures::channel::oneshot::Sender;
+use parking_lot::{Mutex};
+use tokio::sync::RwLock;
 pub use crate::transport::r#async::CowFuture;
 pub use crate::transport::tls::{TlsOptions, TlsOptionsBuilder};
 pub use crate::proto::CowRpcMessage;
@@ -43,24 +48,24 @@ pub use crate::transport::CowRpcMessageInterceptor;
 pub use crate::transport::MessageInjector as CowRpcMessageInjector;
 
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
-use crate::peer::*;
+//use crate::peer::*;
 use crate::proto::*;
-use crate::transport::sync::{CowRpcListener, CowRpcTransport};
-use crate::cancel_event::CancelEventHandle;
+//use crate::transport::sync::{CowRpcListener, CowRpcTransport};
+//use crate::cancel_event::CancelEventHandle;
 
 pub mod async_peer;
 pub mod async_router;
-pub mod cancel_event;
+//pub mod cancel_event;
 pub mod error;
 pub mod msgpack;
-pub mod peer;
+//pub mod peer;
 mod proto;
-pub mod router;
+//pub mod router;
 pub mod transport;
 
-const NEW_CONNECTION: Token = Token(1);
+// const NEW_CONNECTION: Token = Token(1);
 
-pub type CallFuture<T> = Box<dyn Future<Item = T, Error = ()> + Send>;
+pub type CallFuture<T> = Box<dyn Future<Output = std::result::Result<T, ()>> + Unpin + Send>;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcRole {
@@ -74,261 +79,265 @@ pub enum CowRpcMode {
     DIRECT,
 }
 
-/// An RPC context.
-pub struct CowRpc {
-    role: CowRpcRole,
-    mode: CowRpcMode,
-    listener: Mutex<Option<CowRpcListener>>,
-    server_poll: Poll,
-    ifaces: Mutex<Vec<Arc<RwLock<CowRpcIface>>>>,
-}
+// /// An RPC context.
+// pub struct CowRpc {
+//     role: CowRpcRole,
+//     mode: CowRpcMode,
+//     listener: Mutex<Option<CowRpcListener>>,
+//     server_poll: Poll,
+//     ifaces: Mutex<Vec<Arc<RwLock<CowRpcIface>>>>,
+// }
+//
+// impl CowRpc {
+//     /// Creates an RPC context with the provided role and mode.
+//     pub fn new(role: CowRpcRole, mode: CowRpcMode) -> CowRpc {
+//         CowRpc {
+//             role,
+//             mode,
+//             listener: Mutex::new(None),
+//             server_poll: Poll::new().unwrap(),
+//             ifaces: Mutex::new(Vec::new()),
+//         }
+//     }
+//
+//     /// Registers an interface.
+//     ///
+//     /// If the interface is registered to make calls to it, `server` should be `None`.
+//     ///
+//     /// If calls to this interface are implemented, `server` should point to an object that implements the `Server`
+//     /// trait. This object is obtained by calling `ServerDipatch::new` on the generated interface.
+//     ///
+//     /// ```ignore
+//     /// rpc.register_iface(
+//     ///     cow_nowsession_iface_get_def(),
+//     ///     Some(Box::new(now_session_cow::ServerDispatch::new(now_session_iface))));
+//     /// ```
+//     ///
+//     /// On success, this method returns the id of the registered interface.
+//     pub fn register_iface(&self, iface_reg: CowRpcIfaceReg, server: Option<Box<dyn Server>>) -> Result<u16> {
+//         let mut ifaces = self.ifaces.lock();
+//
+//         let iface_id = ifaces.len() as u16;
+//
+//         let mut iface = CowRpcIface {
+//             name: String::from(iface_reg.name),
+//             lid: iface_id,
+//             rid: 0,
+//             procs: Vec::new(),
+//             server,
+//         };
+//
+//         for procedure in iface_reg.procs {
+//             iface.procs.push(CowRpcProc {
+//                 lid: procedure.id,
+//                 rid: 0,
+//                 name: String::from(procedure.name),
+//             })
+//         }
+//
+//         ifaces.push(Arc::new(RwLock::new(iface)));
+//         Ok(iface_id)
+//     }
+//
+//     pub fn get_iface(&self, iface_id: u16, is_local_id: bool) -> Option<Arc<RwLock<CowRpcIface>>> {
+//         let ifaces = self.ifaces.lock();
+//
+//         let ifaces = ifaces.deref();
+//         for iface_mutex in ifaces.iter() {
+//             let iface = iface_mutex.read();
+//             if (is_local_id && iface.lid == iface_id) || (!is_local_id && iface.rid == iface_id) {
+//                 return Some(iface_mutex.clone());
+//             }
+//         }
+//         None
+//     }
+//
+//     pub fn set_iface_server(&self, iface_id: u16, server: Option<Box<dyn Server>>) {
+//         let ifaces = self.ifaces.lock();
+//
+//         let ifaces = ifaces.deref();
+//         for iface_mutex in ifaces.iter() {
+//             let mut iface = iface_mutex.write();
+//             if iface.lid == iface_id {
+//                 iface.set_server(server);
+//                 break;
+//             }
+//         }
+//     }
+//
+//     fn register_iface_def(&self, iface_def: &mut CowRpcIfaceDef, server: bool) -> Result<()> {
+//         let ifaces = self.ifaces.lock();
+//         let mut iface_found = false;
+//
+//         let ifaces = ifaces.deref();
+//         for iface in ifaces.iter() {
+//             let mut iface = iface.write();
+//             if iface_def.name.eq(&iface.name) {
+//                 iface_found = true;
+//
+//                 if server {
+//                     iface.rid = iface.lid;
+//                     iface_def.id = iface.rid;
+//                 } else {
+//                     iface.rid = iface_def.id;
+//                 }
+//
+//                 for proc_def in &mut iface_def.procs {
+//                     let mut proc_found = false;
+//
+//                     for procedure in &mut iface.procs {
+//                         if proc_def.name.eq(&procedure.name) {
+//                             proc_found = true;
+//
+//                             if server {
+//                                 procedure.rid = procedure.lid;
+//                                 proc_def.id = procedure.rid;
+//                             } else {
+//                                 procedure.rid = proc_def.id;
+//                             }
+//                         }
+//                     }
+//
+//                     if !proc_found {
+//                         return Err(error::CowRpcError::Proto(format!(
+//                             "Proc name not found - ({})",
+//                             proc_def.name
+//                         )));
+//                     }
+//                 }
+//             }
+//         }
+//
+//         if !iface_found {
+//             return Err(error::CowRpcError::Proto(format!(
+//                 "IFace name not found - ({})",
+//                 iface_def.name
+//             )));
+//         }
+//
+//         Ok(())
+//     }
+//
+//     /// Listen for RPC clients on `url`.
+//     pub fn server_listen(&self, url: &str, _cert_path: Option<&str>, _pkey_path: Option<&str>) -> Result<()> {
+//         todo!()
+//         // let listener = transport::sync::ListenerBuilder::from_uri(url)?.build()?;
+//         // self.server_poll
+//         //     .register(&listener, NEW_CONNECTION, Ready::readable(), PollOpt::edge())?;
+//         // *self.listener.lock() = Some(listener);
+//         //
+//         // Ok(())
+//     }
+// }
 
-impl CowRpc {
-    /// Creates an RPC context with the provided role and mode.
-    pub fn new(role: CowRpcRole, mode: CowRpcMode) -> CowRpc {
-        CowRpc {
-            role,
-            mode,
-            listener: Mutex::new(None),
-            server_poll: Poll::new().unwrap(),
-            ifaces: Mutex::new(Vec::new()),
-        }
-    }
+// /// A client is used to connect to a remote peer.
+// ///
+// /// Client is an alternative to the `client_connect` function.
+// pub struct Client<'a> {
+//     rpc: Arc<CowRpc>,
+//     url: String,
+//     timeout: Option<Duration>,
+//     cancel_handle: Option<&'a CancelEventHandle>,
+//     tls_options: Option<TlsOptions>,
+// }
+//
+// impl<'a> Client<'a> {
+//     /// Get an instance of a client.
+//     pub fn new(rpc: &Arc<CowRpc>, url: &str) -> Client<'a> {
+//         Client{
+//             rpc: rpc.clone(),
+//             url: url.to_string(),
+//             timeout: None,
+//             cancel_handle: None,
+//             tls_options: None,
+//         }
+//     }
+//
+//     /// Set the default timeout.
+//     pub fn timeout(mut self, timeout: Duration)  -> Client<'a> {
+//         self.timeout = Some(timeout);
+//         self
+//     }
+//
+//     /// Set a cancel handle on the client.
+//     pub fn cancel_handle(mut self, cancel_handle: &'a CancelEventHandle) -> Client<'a> {
+//         self.cancel_handle = Some(cancel_handle);
+//         self
+//     }
+//
+//     /// Set TLS options.
+//     pub fn tls_options(mut self, tls_options: TlsOptions) -> Client<'a> {
+//         self.tls_options = Some(tls_options);
+//         self
+//     }
+//
+//     /// Connects to a remote peer.
+//     ///
+//     /// On success, this function returns a `CowRpcPeer` that represents the remote peer.
+//     pub fn connect(self) -> Result<Arc<CowRpcPeer>> {
+//         todo!()
+//         // let transport = CowRpcTransport::from_url(&self.url, self.tls_options)?;
+//         // let (msg_to_send_tx, msg_to_send_rx) = mio_extras::channel::channel();
+//         // let peer = CowRpcPeer::new(transport, msg_to_send_rx, msg_to_send_tx, &self.rpc)?;
+//         // peer.init_client(self.timeout, self.cancel_handle)?;
+//         // Ok(Arc::new(peer))
+//     }
+// }
 
-    /// Registers an interface.
-    ///
-    /// If the interface is registered to make calls to it, `server` should be `None`.
-    ///
-    /// If calls to this interface are implemented, `server` should point to an object that implements the `Server`
-    /// trait. This object is obtained by calling `ServerDipatch::new` on the generated interface.
-    ///
-    /// ```ignore
-    /// rpc.register_iface(
-    ///     cow_nowsession_iface_get_def(),
-    ///     Some(Box::new(now_session_cow::ServerDispatch::new(now_session_iface))));
-    /// ```
-    ///
-    /// On success, this method returns the id of the registered interface.
-    pub fn register_iface(&self, iface_reg: CowRpcIfaceReg, server: Option<Box<dyn Server>>) -> Result<u16> {
-        let mut ifaces = self.ifaces.lock();
+// /// Connects to a remote peer.
+// ///
+// /// On success, this function returns a `CowRpcPeer` that represents the remote peer.
+// pub fn client_connect(
+//     rpc: &Arc<CowRpc>,
+//     url: &str,
+//     timeout: Option<Duration>,
+//     cancel_handle: Option<&CancelEventHandle>,
+// ) -> Result<Arc<CowRpcPeer>> {
+//     todo!()
+//     // let transport = CowRpcTransport::from_url(url, None)?;
+//     // let (msg_to_send_tx, msg_to_send_rx) = mio_extras::channel::channel();
+//     // let peer = CowRpcPeer::new(transport, msg_to_send_rx, msg_to_send_tx, &rpc)?;
+//     // peer.init_client(timeout, cancel_handle)?;
+//     // Ok(Arc::new(peer))
+// }
 
-        let iface_id = ifaces.len() as u16;
-
-        let mut iface = CowRpcIface {
-            name: String::from(iface_reg.name),
-            lid: iface_id,
-            rid: 0,
-            procs: Vec::new(),
-            server,
-        };
-
-        for procedure in iface_reg.procs {
-            iface.procs.push(CowRpcProc {
-                lid: procedure.id,
-                rid: 0,
-                name: String::from(procedure.name),
-            })
-        }
-
-        ifaces.push(Arc::new(RwLock::new(iface)));
-        Ok(iface_id)
-    }
-
-    pub fn get_iface(&self, iface_id: u16, is_local_id: bool) -> Option<Arc<RwLock<CowRpcIface>>> {
-        let ifaces = self.ifaces.lock();
-
-        let ifaces = ifaces.deref();
-        for iface_mutex in ifaces.iter() {
-            let iface = iface_mutex.read();
-            if (is_local_id && iface.lid == iface_id) || (!is_local_id && iface.rid == iface_id) {
-                return Some(iface_mutex.clone());
-            }
-        }
-        None
-    }
-
-    pub fn set_iface_server(&self, iface_id: u16, server: Option<Box<dyn Server>>) {
-        let ifaces = self.ifaces.lock();
-
-        let ifaces = ifaces.deref();
-        for iface_mutex in ifaces.iter() {
-            let mut iface = iface_mutex.write();
-            if iface.lid == iface_id {
-                iface.set_server(server);
-                break;
-            }
-        }
-    }
-
-    fn register_iface_def(&self, iface_def: &mut CowRpcIfaceDef, server: bool) -> Result<()> {
-        let ifaces = self.ifaces.lock();
-        let mut iface_found = false;
-
-        let ifaces = ifaces.deref();
-        for iface in ifaces.iter() {
-            let mut iface = iface.write();
-            if iface_def.name.eq(&iface.name) {
-                iface_found = true;
-
-                if server {
-                    iface.rid = iface.lid;
-                    iface_def.id = iface.rid;
-                } else {
-                    iface.rid = iface_def.id;
-                }
-
-                for proc_def in &mut iface_def.procs {
-                    let mut proc_found = false;
-
-                    for procedure in &mut iface.procs {
-                        if proc_def.name.eq(&procedure.name) {
-                            proc_found = true;
-
-                            if server {
-                                procedure.rid = procedure.lid;
-                                proc_def.id = procedure.rid;
-                            } else {
-                                procedure.rid = proc_def.id;
-                            }
-                        }
-                    }
-
-                    if !proc_found {
-                        return Err(error::CowRpcError::Proto(format!(
-                            "Proc name not found - ({})",
-                            proc_def.name
-                        )));
-                    }
-                }
-            }
-        }
-
-        if !iface_found {
-            return Err(error::CowRpcError::Proto(format!(
-                "IFace name not found - ({})",
-                iface_def.name
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Listen for RPC clients on `url`.
-    pub fn server_listen(&self, url: &str, _cert_path: Option<&str>, _pkey_path: Option<&str>) -> Result<()> {
-        let listener = transport::sync::ListenerBuilder::from_uri(url)?.build()?;
-        self.server_poll
-            .register(&listener, NEW_CONNECTION, Ready::readable(), PollOpt::edge())?;
-        *self.listener.lock() = Some(listener);
-
-        Ok(())
-    }
-}
-
-/// A client is used to connect to a remote peer.
-/// 
-/// Client is an alternative to the `client_connect` function.
-pub struct Client<'a> {
-    rpc: Arc<CowRpc>,
-    url: String,
-    timeout: Option<Duration>,
-    cancel_handle: Option<&'a CancelEventHandle>,
-    tls_options: Option<TlsOptions>,
-}
-
-impl<'a> Client<'a> {
-    /// Get an instance of a client.
-    pub fn new(rpc: &Arc<CowRpc>, url: &str) -> Client<'a> {
-        Client{
-            rpc: rpc.clone(),
-            url: url.to_string(),
-            timeout: None,
-            cancel_handle: None,
-            tls_options: None,
-        }
-    }
-
-    /// Set the default timeout.
-    pub fn timeout(mut self, timeout: Duration)  -> Client<'a> {
-        self.timeout = Some(timeout);
-        self
-    }
-
-    /// Set a cancel handle on the client.
-    pub fn cancel_handle(mut self, cancel_handle: &'a CancelEventHandle) -> Client<'a> {
-        self.cancel_handle = Some(cancel_handle);
-        self
-    }
-
-    /// Set TLS options.
-    pub fn tls_options(mut self, tls_options: TlsOptions) -> Client<'a> {
-        self.tls_options = Some(tls_options);
-        self
-    }
-
-    /// Connects to a remote peer.
-    /// 
-    /// On success, this function returns a `CowRpcPeer` that represents the remote peer.
-    pub fn connect(self) -> Result<Arc<CowRpcPeer>> {
-        let transport = CowRpcTransport::from_url(&self.url, self.tls_options)?;
-        let (msg_to_send_tx, msg_to_send_rx) = mio_extras::channel::channel();
-        let peer = CowRpcPeer::new(transport, msg_to_send_rx, msg_to_send_tx, &self.rpc)?;
-        peer.init_client(self.timeout, self.cancel_handle)?;
-        Ok(Arc::new(peer))
-    }
-}
-
-/// Connects to a remote peer.
-///
-/// On success, this function returns a `CowRpcPeer` that represents the remote peer.
-pub fn client_connect(
-    rpc: &Arc<CowRpc>,
-    url: &str,
-    timeout: Option<Duration>,
-    cancel_handle: Option<&CancelEventHandle>,
-) -> Result<Arc<CowRpcPeer>> {
-    let transport = CowRpcTransport::from_url(url, None)?;
-    let (msg_to_send_tx, msg_to_send_rx) = mio_extras::channel::channel();
-    let peer = CowRpcPeer::new(transport, msg_to_send_rx, msg_to_send_tx, &rpc)?;
-    peer.init_client(timeout, cancel_handle)?;
-    Ok(Arc::new(peer))
-}
-
-/// Wait for a remote peer to connect to the server.
-///
-/// Returns the connected `CowRpcPeer` on success.
-pub fn server_connect(
-    rpc: &Arc<CowRpc>,
-    timeout: Option<Duration>,
-    cancel_handle: Option<&CancelEventHandle>,
-) -> Result<Option<Arc<CowRpcPeer>>> {
-    let listener_guard = rpc.listener.lock();
-    assert_eq!(listener_guard.is_some(), true);
-    let listener = listener_guard.as_ref().unwrap();
-
-    // Create storage for events
-    let mut events = Events::with_capacity(1024);
-
-    //    info!("Waiting clients on port {}...", listener.local_addr().unwrap().port());
-    loop {
-        rpc.server_poll.poll(&mut events, None).unwrap();
-
-        for event in events.iter() {
-            match event.token() {
-                NEW_CONNECTION => {
-                    let transport = listener.accept().unwrap();
-                    info!("New client");
-
-                    let (msg_to_send_tx, msg_to_send_rx) = mio_extras::channel::channel();
-                    let peer = CowRpcPeer::new(transport, msg_to_send_rx, msg_to_send_tx, &rpc)?;
-                    peer.init_server(timeout, cancel_handle)?;
-
-                    return Ok(Some(Arc::new(peer)));
-                }
-                _ => {}
-            }
-        }
-    }
-}
+// /// Wait for a remote peer to connect to the server.
+// ///
+// /// Returns the connected `CowRpcPeer` on success.
+// pub fn server_connect(
+//     rpc: &Arc<CowRpc>,
+//     timeout: Option<Duration>,
+//     cancel_handle: Option<&CancelEventHandle>,
+// ) -> Result<Option<Arc<CowRpcPeer>>> {
+//     todo!()
+//     // let listener_guard = rpc.listener.lock();
+//     // assert_eq!(listener_guard.is_some(), true);
+//     // let listener = listener_guard.as_ref().unwrap();
+//     //
+//     // // Create storage for events
+//     // let mut events = Events::with_capacity(1024);
+//     //
+//     // //    info!("Waiting clients on port {}...", listener.local_addr().unwrap().port());
+//     // loop {
+//     //     rpc.server_poll.poll(&mut events, None).unwrap();
+//     //
+//     //     for event in events.iter() {
+//     //         match event.token() {
+//     //             NEW_CONNECTION => {
+//     //                 let transport = listener.accept().unwrap();
+//     //                 info!("New client");
+//     //
+//     //                 let (msg_to_send_tx, msg_to_send_rx) = mio_extras::channel::channel();
+//     //                 let peer = CowRpcPeer::new(transport, msg_to_send_rx, msg_to_send_tx, &rpc)?;
+//     //                 peer.init_server(timeout, cancel_handle)?;
+//     //
+//     //                 return Ok(Some(Arc::new(peer)));
+//     //             }
+//     //             _ => {}
+//     //         }
+//     //     }
+//     // }
+// }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum CowRpcState {
@@ -762,31 +771,34 @@ impl CowRpcAsyncIface {
     }
 }
 
+#[async_trait]
 trait Iface {
-    fn get_remote_id(&self) -> u16;
-    fn get_local_id(&self) -> u16;
+    async fn get_remote_id(&self) -> u16;
+    async fn get_local_id(&self) -> u16;
 }
 
+#[async_trait]
 impl Iface for Arc<RwLock<CowRpcIface>> {
-    fn get_remote_id(&self) -> u16 {
-        let iface = self.read();
+    async fn get_remote_id(&self) -> u16 {
+        let iface = self.read().await;
         iface.rid
     }
 
-    fn get_local_id(&self) -> u16 {
-        let iface = self.read();
+    async fn get_local_id(&self) -> u16 {
+        let iface = self.read().await;
         iface.lid
     }
 }
 
+#[async_trait]
 impl Iface for Arc<RwLock<CowRpcAsyncIface>> {
-    fn get_remote_id(&self) -> u16 {
-        let iface = self.read();
+    async fn get_remote_id(&self) -> u16 {
+        let iface = self.read().await;
         return iface.rid;
     }
 
-    fn get_local_id(&self) -> u16 {
-        let iface = self.read();
+    async fn get_local_id(&self) -> u16 {
+        let iface = self.read().await;
         return iface.lid;
     }
 }
@@ -868,12 +880,12 @@ impl CowRpcAsyncBindContext {
         })
     }
 
-    pub fn get_iface_remote_id(&self) -> u16 {
-        return self.iface.read().rid;
+    pub async fn get_iface_remote_id(&self) -> u16 {
+        return self.iface.read().await.rid;
     }
 
-    pub fn get_proc_remote_id(&self, local_proc_id: u16) -> Option<u16> {
-        let iface = self.iface.read();
+    pub async fn get_proc_remote_id(&self, local_proc_id: u16) -> Option<u16> {
+        let iface = self.iface.read().await;
         let p_opt = iface.get_proc(local_proc_id, true);
         if let Some(p) = p_opt {
             return Some(p.rid);
@@ -903,12 +915,12 @@ impl CowRpcBindContext {
         })
     }
 
-    pub fn get_iface_remote_id(&self) -> u16 {
-        self.iface.read().rid
+    pub async fn get_iface_remote_id(&self) -> u16 {
+        self.iface.read().await.rid
     }
 
-    pub fn get_proc_remote_id(&self, local_proc_id: u16) -> Option<u16> {
-        let iface = self.iface.read();
+    pub async fn get_proc_remote_id(&self, local_proc_id: u16) -> Option<u16> {
+        let iface = self.iface.read().await;
         let p_opt = iface.get_proc(local_proc_id, true);
         if let Some(p) = p_opt {
             Some(p.rid)

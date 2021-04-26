@@ -1,6 +1,7 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use crate::error::CowRpcError;
-use futures::{self, Async, AsyncSink, Future, Sink, Stream};
+use futures::prelude::*;
+use futures::{self, Future};
 use crate::proto::{CowRpcMessage, Message};
 use std::{
     io::{ErrorKind, Read, Write},
@@ -12,7 +13,11 @@ use crate::transport::{
     uri::Uri,
     MessageInterceptor, TransportError,
 };
-use tokio_tcp::TcpStream;
+use std::task::{Context, Poll};
+use std::pin::Pin;
+use tokio::net::TcpStream;
+use std::io::Error;
+use async_trait::async_trait;
 
 pub struct TcpTransport {
     stream: TcpStream,
@@ -20,20 +25,20 @@ pub struct TcpTransport {
     connected_at: Instant,
 }
 
-impl Clone for TcpTransport {
-    fn clone(&self) -> Self {
-        let stream = self
-            .stream
-            .try_clone()
-            .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
-
-        TcpTransport {
-            stream,
-            callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-            connected_at: self.connected_at,
-        }
-    }
-}
+// impl Clone for TcpTransport {
+//     fn clone(&self) -> Self {
+//         let stream = self
+//             .stream
+//             .try_clone()
+//             .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
+//
+//         TcpTransport {
+//             stream,
+//             callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
+//             connected_at: self.connected_at,
+//         }
+//     }
+// }
 
 impl TcpTransport {
     pub fn new(stream: TcpStream, msg_inter: Option<Box<dyn MessageInterceptor>>) -> Self {
@@ -45,8 +50,9 @@ impl TcpTransport {
     }
 }
 
+#[async_trait]
 impl Transport for TcpTransport {
-    fn connect(uri: Uri) -> CowFuture<Self>
+    async fn connect(uri: Uri) -> Result<Self, CowRpcError>
     where
         Self: Sized,
     {
@@ -59,23 +65,23 @@ impl Transport for TcpTransport {
             for addr in addrs {
                 let sock_addr = SocketAddr::new(addr, port);
 
-                return Box::new(
-                    TcpStream::connect(&sock_addr)
-                        .map(|stream| TcpTransport {
+                match TcpStream::connect(&sock_addr).await {
+                    Ok(stream) => {
+                        return Ok(TcpTransport {
                             stream,
                             callback_handler: None,
                             connected_at: Instant::now(),
-                        }).map_err(|err| {
-                            error!("{:?}", err);
-                            CowRpcError::from(TransportError::UnableToConnect)
-                        }),
-                );
+                        });
+                    }
+                    Err(e) => {
+                        error!("{:?}", e);
+                        return Err(CowRpcError::from(TransportError::UnableToConnect));
+                    }
+                }
             }
         }
 
-        Box::new(futures::failed(
-            TransportError::InvalidUrl("Unable to resolve hostname".to_string()).into(),
-        ))
+        Err(TransportError::InvalidUrl("Unable to resolve hostname".to_string()).into())
     }
 
     fn message_sink(&mut self) -> CowSink<CowRpcMessage> {
@@ -132,10 +138,9 @@ pub struct CowMessageStream {
 }
 
 impl Stream for CowMessageStream {
-    type Item = CowRpcMessage;
-    type Error = CowRpcError;
+    type Item = Result<CowRpcMessage, CowRpcError>;
 
-    fn poll(&mut self) -> ::std::result::Result<Async<Option<<Self as Stream>::Item>>, <Self as Stream>::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         {
             let data_len = self.data_received.len();
             if data_len > 4 {
@@ -154,13 +159,13 @@ impl Stream for CowMessageStream {
                         match interceptor.before_recv(msg) {
                             Some(msg) => {
                                 debug!("<< {}", msg.get_msg_info());
-                                return Ok(Async::Ready(Some(msg)));
+                                return Poll::Ready(Some(Ok(msg)));
                             }
                             None => {}
                         };
                     } else {
                         debug!("<< {}", msg.get_msg_info());
-                        return Ok(Async::Ready(Some(msg)));
+                        return Poll::Ready(Some(Ok(msg)));
                     }
                 }
             }
@@ -171,7 +176,7 @@ impl Stream for CowMessageStream {
             let result = self.stream.read(&mut buff);
             match result {
                 Ok(0) => {
-                    return Ok(Async::Ready(None));
+                    return Poll::Ready(None);
                 }
                 Ok(n) => {
                     let data_len = n;
@@ -195,23 +200,23 @@ impl Stream for CowMessageStream {
                                 match interceptor.before_recv(msg) {
                                     Some(msg) => {
                                         debug!("<< {}", msg.get_msg_info());
-                                        return Ok(Async::Ready(Some(msg)));
+                                        return Poll::Ready(Some(Ok(msg)));
                                     }
                                     None => {}
                                 };
                             } else {
                                 debug!("<< {}", msg.get_msg_info());
-                                return Ok(Async::Ready(Some(msg)));
+                                return Poll::Ready(Some(Ok(msg)));
                             }
                         }
                     }
                     continue;
                 }
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                    return Ok(Async::NotReady);
+                    return Poll::Pending;
                 }
                 Err(e) => {
-                    return Err(e.into());
+                    return Poll::Ready(Some(Err(e.into())));
                 }
             }
         }
@@ -230,44 +235,44 @@ pub struct CowMessageSink {
     pub callback_handler: Option<Box<dyn MessageInterceptor>>,
 }
 
-impl Sink for CowMessageSink {
-    type SinkItem = CowRpcMessage;
-    type SinkError = CowRpcError;
+impl Sink<CowRpcMessage> for CowMessageSink {
+    type Error = CowRpcError;
 
-    fn start_send(
-        &mut self,
-        item: <Self as Sink>::SinkItem,
-    ) -> ::std::result::Result<AsyncSink<<Self as Sink>::SinkItem>, <Self as Sink>::SinkError> {
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: CowRpcMessage) -> Result<(), Self::Error> {
         let mut msg = item;
 
         if let Some(ref mut interceptor) = self.callback_handler {
             msg = match interceptor.before_send(msg) {
                 Some(msg) => msg,
-                None => return Ok(AsyncSink::Ready),
+                None => return Ok(()),
             };
         }
 
         debug!(">> {}", msg.get_msg_info());
         msg.write_to(&mut self.data_to_send)?;
-        Ok(AsyncSink::Ready)
+        Ok(())
     }
 
-    fn poll_complete(&mut self) -> ::std::result::Result<Async<()>, <Self as Sink>::SinkError> {
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         if !self.data_to_send.is_empty() {
             let res = self.stream.write_all(&self.data_to_send);
             if let Err(e) = res {
                 if let ErrorKind::WouldBlock = e.kind() {
-                    return Ok(Async::NotReady);
+                    return Poll::Pending;
                 }
 
-                return Err(e.into());
+                return Poll::Ready(Err(e.into()));
             }
             self.data_to_send.clear();
         }
-        Ok(Async::Ready(()))
+        Poll::Ready(Ok(()))
     }
 
-    fn close(&mut self) -> ::std::result::Result<Async<()>, <Self as Sink>::SinkError> {
-        Ok(Async::Ready(()))
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
     }
 }

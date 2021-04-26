@@ -1,6 +1,5 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::error::{CowRpcError, Result};
-use crate::router::CowRpcIdentity;
 use std;
 use std::io::{Read, Write};
 use crate::CowRpcIdentityType;
@@ -1153,4 +1152,11 @@ fn test_resolve_serialize() {
 
     assert_eq!(s1, s2);
     assert_eq!(s1.get_size(flag), s2.get_size(flag));
+}
+
+
+#[derive(Cacheable, Debug, PartialEq, Eq, Clone)]
+pub struct CowRpcIdentity {
+    pub typ: CowRpcIdentityType,
+    pub name: String,
 }

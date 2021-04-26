@@ -3,13 +3,13 @@ use std::any::Any;
 use std::fmt;
 use std::net::SocketAddr;
 
-use mio::{Evented, Poll, PollOpt, Ready, Token};
+//use mio::{Evented, Poll, PollOpt, Ready, Token};
 
 use crate::error::{CowRpcError, Result};
 use crate::proto::CowRpcMessage;
 
 pub mod r#async;
-pub mod sync;
+//pub mod sync;
 mod uri;
 pub mod tls;
 
@@ -20,9 +20,9 @@ pub enum SupportedProto {
     WebSocket
 }
 
-pub trait TransportAdapter: Evented {
-    fn get_next_message(&self) -> Result<Option<CowRpcMessage>>;
-}
+// pub trait TransportAdapter: Evented {
+//     fn get_next_message(&self) -> Result<Option<CowRpcMessage>>;
+// }
 
 pub trait MessageInjector: Sync {
     fn inject(&self, msg: CowRpcMessage);
@@ -137,8 +137,8 @@ impl From<::tls_api::Error> for TransportError {
     }
 }
 
-impl From<::tungstenite::Error> for TransportError {
-    fn from(e: ::tungstenite::Error) -> Self {
+impl From<::async_tungstenite::tungstenite::Error> for TransportError {
+    fn from(e: ::async_tungstenite::tungstenite::Error) -> Self {
         TransportError::WsError(e.to_string())
     }
 }

@@ -1,10 +1,13 @@
 use crate::error::{CowRpcError, Result};
-use futures::{Async, Stream, task};
+use futures::prelude::*;
+use futures_01::{task};
 use parking_lot::Mutex;
 use crate::proto::CowRpcMessage;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use super::*;
+use std::task::{Context, Poll};
+use std::pin::Pin;
 
 #[derive(Clone)]
 pub struct Adaptor {
@@ -50,10 +53,9 @@ struct AdaptorStream {
 }
 
 impl Stream for AdaptorStream {
-    type Item = CowRpcMessage;
-    type Error = CowRpcError;
+    type Item = Result<CowRpcMessage>;
 
-    fn poll(&mut self) -> Result<Async<Option<<Self as Stream>::Item>>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut messages = self.messages.lock();
 
         if messages.is_empty() {
@@ -62,9 +64,10 @@ impl Stream for AdaptorStream {
                 *task = Some(task::current());
             }
 
-            return Ok(Async::NotReady);
+            return Poll::Pending;
         }
 
-        Ok(Async::Ready(messages.pop_front()))
+        let msg = messages.pop_front().map(|msg| Ok(msg));
+        Poll::Ready(msg)
     }
 }

@@ -1,15 +1,16 @@
 use super::{CowRpcIdentityType, CowRpcMessage};
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
-use futures::{future::ok, future::err, sync::oneshot::{channel, Receiver, Sender}, Async, Future, Stream};
+use futures::prelude::*;
+use futures::future::{ok, err};
+use futures::Future;
+use futures::channel::oneshot::{Receiver, Sender, channel};
 use mouscache;
 use mouscache::Cache;
 use mouscache::CacheFunc;
-use tokio::sync::RwLock as TokioRwLock;
-use parking_lot::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock};
 use crate::proto;
 use crate::proto::*;
 use rand;
-use crate::router::CowRpcIdentity;
 use std;
 use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 use crate::transport::{
@@ -18,10 +19,13 @@ use crate::transport::{
     tls::TlsOptions,
 };
 use crate::CowRpcMessageInterceptor;
-use futures_03::compat::{Future01CompatExt, Compat, Stream01CompatExt};
-use futures_03::future::{TryFutureExt, FutureExt};
-use futures_03::stream::StreamExt;
-use futures_03::future::BoxFuture;
+use futures::future::{TryFutureExt, FutureExt};
+use futures::stream::StreamExt;
+use futures::future::BoxFuture;
+use futures::Sink;
+use std::task::{Context, Poll};
+use std::pin::Pin;
+use crate::transport::r#async::StreamEx;
 
 pub type RouterMonitor = Receiver<()>;
 
@@ -67,14 +71,14 @@ struct PeersAreAliveTaskInfo {
 }
 
 impl CowRpcRouter {
-    pub fn new(url: &str, listener_tls_options: Option<TlsOptions>) -> Result<(CowRpcRouter, RouterHandle)> {
+    pub async fn new(url: &str, listener_tls_options: Option<TlsOptions>) -> Result<(CowRpcRouter, RouterHandle)> {
         let id: u32 = 0;
         let (handle, router_monitor) = channel();
         let router = CowRpcRouter {
             listener_url: url.to_string(),
             listener_tls_options,
             monitor: router_monitor,
-            shared: RouterShared::new(id),
+            shared: RouterShared::new(id).await,
             adaptor: Adaptor::new(),
             msg_interceptor: None,
             peers_are_alive_task_info: None,
@@ -86,7 +90,7 @@ impl CowRpcRouter {
         Ok((router, router_handle))
     }
 
-    pub fn new2(
+    pub async fn new2(
         id: u16,
         cache: Cache,
         url: &str,
@@ -98,7 +102,7 @@ impl CowRpcRouter {
             listener_url: url.to_string(),
             listener_tls_options,
             monitor: router_monitor,
-            shared: RouterShared::new2(router_id, cache),
+            shared: RouterShared::new2(router_id, cache).await,
             adaptor: Adaptor::new(),
             msg_interceptor: None,
             peers_are_alive_task_info: None,
@@ -110,8 +114,8 @@ impl CowRpcRouter {
         Ok((router, router_handle))
     }
 
-    pub fn on_peer_connection_callback<F: 'static + Fn(u32) + Send + Sync>(&mut self, callback: F) {
-        let mut cb = self.shared.inner.on_peer_connection_callback.write();
+    pub async fn on_peer_connection_callback<F: 'static + Fn(u32) + Send + Sync>(&mut self, callback: F) {
+        let mut cb = self.shared.inner.on_peer_connection_callback.write().await;
         *cb = Some(Box::new(callback));
     }
 
@@ -132,7 +136,7 @@ impl CowRpcRouter {
         self.keep_alive_interval = Some(interval);
     }
 
-    pub fn set_msg_interceptor<T: 'static + Send + Sync + Clone>(&mut self, interceptor: CowRpcMessageInterceptor<T>) {
+    pub async fn set_msg_interceptor<T: 'static + Send + Sync + Clone>(&mut self, interceptor: CowRpcMessageInterceptor<T>) {
         let peer = CowRpcRouterPeerSender {
             inner: Arc::new(CowRpcRouterPeerSharedInner {
                 cow_id: 0,
@@ -141,7 +145,7 @@ impl CowRpcRouter {
                 binds: RouterBindCollection::new(0, self.shared.inner.cache.get_raw_cache().clone()),
             }),
         };
-        *self.shared.inner.multi_router_peer.write() = Some(peer);
+        *self.shared.inner.multi_router_peer.write().await = Some(peer);
         self.msg_interceptor = Some(Box::new(interceptor));
     }
 
@@ -160,7 +164,7 @@ impl CowRpcRouter {
         self.shared.inner.id
     }
 
-    pub fn spawn(self) -> Result<RouterMonitor> {
+    pub async fn spawn(self) -> Result<RouterMonitor> {
         let CowRpcRouter {
             listener_url,
             listener_tls_options,
@@ -184,95 +188,78 @@ impl CowRpcRouter {
             listener_builder = listener_builder.with_ssl(tls);
         }
 
-        let listener = listener_builder.build()?;
+        let listener = listener_builder.build().await?;
 
-        let router_peer_stream = listener.incoming().for_each(move |stream_fut| {
-            let router_shared_hand = router_shared_clone.clone();
-            let keep_alive_interval_clone = keep_alive_interval.clone();
+        let incoming = listener.incoming().await;
+        let router_peer_stream = incoming.for_each(move |transport| {
+            let router = router_shared_clone.clone();
+            tokio::spawn(async move {
+                match transport {
+                    Ok(mut transport) => {
+                        if let Ok(mut transport) = transport.await {
+                            transport.set_keep_alive_interval(keep_alive_interval.clone());
 
-            let peer_handshake = stream_fut.and_then(move |mut stream| {
-                stream.set_keep_alive_interval(keep_alive_interval_clone);
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(PEER_CONNECTION_GRACE_PERIOD),
-                    CowRpcRouterPeer::handshake(stream, router_shared_hand.clone())
-                )
-                .unit_error()
-                .boxed()
-                .compat()
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))
-                .and_then(|result| {
-                    match result {
-                        Ok(Ok(res)) => {
-                            ok(res)
-                        }
-                        Err(e) => {
-                            err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
-                        }
-                        Ok(Err(e)) => {
-                            err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
-                        }
+                            if let Err(e) = process_connection(transport, router).await {
+                                error!("Peer finished with error: {:?}", e);
+                            }
+                        };
+                    },
+                    Err(e) => {
+                        error!("{}", e);
                     }
-                })
+                }
             });
-
-            let peer_router_shared = router_shared_clone.clone();
-            let router_cleanup_clone = router_shared_clone.clone();
-            let peer_fut = peer_handshake
-                .and_then(move |(peer, peer_sender)| {
-                    {
-                        peer_router_shared
-                            .inner
-                            .peer_senders
-                            .write()
-                            .insert(peer.inner.cow_id, peer_sender);
-
-                        if let Some(ref callback) = &*peer_router_shared.inner.on_peer_connection_callback.read() {
-                            callback(peer.inner.cow_id);
-                        }
-                    }
-
-                    peer.or_else(|(peer_id, identity, error)| {
-                        error!("Got an error while polling peer {:#010X} : {:?}", peer_id, error);
-                        ok((peer_id, identity))
-                    }).and_then(move |(peer_id, identity)| {
-                        router_cleanup_clone.clean_up_connection(peer_id, identity).unit_error().boxed().compat()
-                            .map_err(|_|CowRpcError::Internal("Should not happen".to_string()))
-                    })
-
-                }).map_err(|e| {
-                trace!("{:?}", e);
-            });
-
-            tokio::spawn(peer_fut.compat());
-
-            ok(())
+            future::ready(())
         });
 
-        tokio::spawn(router_peer_stream.map_err(|_cow_error| ()).compat());
+        tokio::spawn(router_peer_stream);
+
+
         let mut router_shared_clone = shared.clone();
         tokio::spawn(
-            adaptor
-                .message_stream()
-                .for_each(move |msg| {
+        adaptor
+            .message_stream()
+            .for_each(move |msg| {
+                if let Ok(msg) = msg {
                     router_shared_clone.process_msg(msg);
-                    ok::<(), CowRpcError>(())
-                }).map(|_| ())
-                .map_err(|_| ())
-                .compat(),
+                }
+                future::ready(())
+            })
         );
 
         if let Some(task_info) = peers_are_alive_task_info {
             tokio::spawn(peers_are_alive_task(shared.inner.peer_senders.clone(), task_info));
         }
-
         Ok(monitor)
     }
+}
+
+async fn process_connection(transport: CowRpcTransport, router: RouterShared) -> Result<()> {
+    let (peer, peer_sender) = tokio::time::timeout(
+        std::time::Duration::from_secs(PEER_CONNECTION_GRACE_PERIOD),
+        CowRpcRouterPeer::handshake(transport, router.clone())
+    ).await.map_err(|_| CowRpcError::Internal("timed out".to_string()))??;
+
+    router.clone()
+        .inner
+        .peer_senders
+        .write().await
+        .insert(peer.inner.cow_id, peer_sender);
+
+    if let Some(ref callback) = &*router.inner.on_peer_connection_callback.read().await {
+        callback(peer.inner.cow_id);
+    }
+
+    let (peer_id, identity) = peer.await.map_err(|(_, _, error)| error)?;
+    router.clone().clean_up_connection(peer_id, identity).await;
+
+    Ok(())
 }
 
 async fn peers_are_alive_task(peers: Arc<RwLock<HashMap<u32, CowRpcRouterPeerSender>>>, task_info: PeersAreAliveTaskInfo) {
     let interval = tokio::time::interval(task_info.interval);
     interval.for_each(|_| async {
-        let peers: Vec<u32> = peers.read().keys().map(|x| x.clone()).collect();
+        let peers: Vec<u32> = peers.read().await.keys().map(|x| x.clone()).collect();
         (task_info.callback)(&peers).await;
     }).await;
 }
@@ -283,36 +270,36 @@ struct Inner {
     ifaces: RouterIfaceCollection,
     peer_senders: Arc<RwLock<HashMap<u32, CowRpcRouterPeerSender>>>,
     multi_router_peer: RwLock<Option<CowRpcRouterPeerSender>>,
-    verify_identity_cb: TokioRwLock<Option<Box<IdentityVerificationCallback>>>,
+    verify_identity_cb: RwLock<Option<Box<IdentityVerificationCallback>>>,
     on_peer_connection_callback: RwLock<Option<Box<PeerConnectionCallback>>>,
-    on_peer_disconnection_callback: TokioRwLock<Option<Box<PeerDisconnectionCallback>>>,
+    on_peer_disconnection_callback: RwLock<Option<Box<PeerDisconnectionCallback>>>,
 }
 
 impl Inner {
-    fn new(id: u32) -> Inner {
+    async fn new(id: u32) -> Inner {
         let cache = mouscache::memory();
         Inner {
             id,
             cache: RouterCache::new(cache.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
-            ifaces: RouterIfaceCollection::new(cache),
-            verify_identity_cb: TokioRwLock::new(None),
+            ifaces: RouterIfaceCollection::new(cache).await,
+            verify_identity_cb: RwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
             multi_router_peer: RwLock::new(None),
-            on_peer_disconnection_callback: TokioRwLock::new(None),
+            on_peer_disconnection_callback: RwLock::new(None),
         }
     }
 
-    fn new2(id: u32, cache: Cache) -> Inner {
+    async fn new2(id: u32, cache: Cache) -> Inner {
         Inner {
             id,
             cache: RouterCache::new(cache.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
-            ifaces: RouterIfaceCollection::new(cache),
-            verify_identity_cb: TokioRwLock::new(None),
+            ifaces: RouterIfaceCollection::new(cache).await,
+            verify_identity_cb: RwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
             multi_router_peer: RwLock::new(None),
-            on_peer_disconnection_callback: TokioRwLock::new(None),
+            on_peer_disconnection_callback: RwLock::new(None),
         }
     }
 }
@@ -323,46 +310,48 @@ struct RouterShared {
 }
 
 impl RouterShared {
-    fn new(id: u32) -> RouterShared {
+    async fn new(id: u32) -> RouterShared {
         RouterShared {
-            inner: Arc::new(Inner::new(id)),
+            inner: Arc::new(Inner::new(id).await),
         }
     }
 
-    fn new2(id: u32, cache: Cache) -> RouterShared {
+    async fn new2(id: u32, cache: Cache) -> RouterShared {
         RouterShared {
-            inner: Arc::new(Inner::new2(id, cache)),
+            inner: Arc::new(Inner::new2(id, cache).await),
         }
     }
 
     #[inline]
-    fn find_sender_and_then<F, U>(&mut self, cow_id: u32, and_then: F) -> U
+    async fn find_sender_and_then<F, U>(&mut self, cow_id: u32, and_then: F) -> U
         where
-            F: FnOnce(Option<&CowRpcRouterPeerSender>) -> U,
+            F: FnOnce(Option<&CowRpcRouterPeerSender>) -> BoxFuture<'_, U>,
     {
-        let reader = self.inner.peer_senders.read();
+        // TODO
+        let reader = self.inner.peer_senders.read().await;
         let sender_opt = reader
             .iter()
             .find(|p| p.1.inner.cow_id == cow_id)
             .map(|(_, peer_s)| peer_s);
 
-        let res = and_then(sender_opt);
+        let res = and_then(sender_opt).await;
 
-        sender_opt.and_then(|sender| {
-            let _ = sender.inner.writer_sink.lock().poll_complete();
-            Some(())
-        });
+        //TODO Is it still needed ?
+        // sender_opt.and_then(|sender| {
+        //     let _ = sender.inner.writer_sink.lock().await.poll_complete();
+        //     Some(())
+        // });
 
         res
     }
 
-    fn register_iface_def(&self, iface_def: &mut CowRpcIfaceDef) -> Result<()> {
-        self.inner.ifaces.add(iface_def)
+    async fn register_iface_def(&self, iface_def: &mut CowRpcIfaceDef) -> Result<()> {
+        self.inner.ifaces.add(iface_def).await
     }
 
     async fn clean_up_connection(self, peer_id: u32, peer_identity: Option<CowRpcIdentity>) {
         let peer = {
-            let mut peers = self.inner.peer_senders.write();
+            let mut peers = self.inner.peer_senders.write().await;
             peers.remove(&peer_id)
         };
 
@@ -388,14 +377,14 @@ impl RouterShared {
                                 } else {
                                     client_id
                                 };
-                                let mut peers = self.inner.peer_senders.write();
+                                let mut peers = self.inner.peer_senders.write().await;
                                 if let Some(remote_ref) = peers.get_mut(&remote_id) {
-                                    remote_ref.send_unbind_req(client_id, server_id, iface_id);
-                                    {
-                                        let _ = remote_ref.inner.writer_sink.lock().poll_complete();
-                                    }
+                                    remote_ref.send_unbind_req(client_id, server_id, iface_id).await;
+                                    // {
+                                    //     let _ = remote_ref.inner.writer_sink.lock().poll_complete();
+                                    // }
                                 } else {
-                                    if let Some(ref router_sender) = &*self.inner.multi_router_peer.read() {
+                                    if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
                                         // Send Unbind req
                                         let iface_def = CowRpcIfaceDef {
                                             id: iface_id,
@@ -446,13 +435,13 @@ impl RouterShared {
         }
     }
 
-    fn process_msg(&mut self, msg: CowRpcMessage) {
+    async fn process_msg(&mut self, msg: CowRpcMessage) {
         match msg.clone() {
             CowRpcMessage::Bind(hdr, msg) => {
                 if !hdr.is_response() {
                     self.process_bind_req(hdr, msg);
                 } else {
-                    self.process_bind_rsp(hdr, msg);
+                    self.process_bind_rsp(hdr, msg).await;
                 }
             }
             CowRpcMessage::Unbind(hdr, msg) => {
@@ -473,7 +462,7 @@ impl RouterShared {
         trace!("received bind request")
     }
 
-    fn process_bind_rsp(&mut self, header: CowRpcHdr, msg: CowRpcBindMsg) {
+    async fn process_bind_rsp(&mut self, header: CowRpcHdr, msg: CowRpcBindMsg) {
         for iface in msg.ifaces {
             let client_id = header.dst_id;
             let server_id = header.src_id;
@@ -495,12 +484,12 @@ impl RouterShared {
             }
 
             if success {
-                self.find_sender_and_then(header.dst_id, |peer_sender_opt| {
+                self.find_sender_and_then(header.dst_id, |peer_sender_opt| Box::pin(async move {
                     if let Some(sender) = peer_sender_opt {
                         sender.add_bind(client_id, server_id, iface_id);
                         sender.add_remote_bind(header.src_id, client_id, server_id, iface_id);
                     }
-                });
+                })).await;
             }
         }
     }
@@ -553,7 +542,7 @@ impl RouterShared {
         }
     }
 
-    fn update_bind(
+    async fn update_bind(
         &mut self,
         local_peer_id: u32,
         client_id: u32,
@@ -562,7 +551,7 @@ impl RouterShared {
         new_state: CowRpcBindState,
     ) {
         // Update the bind state
-        self.find_sender_and_then(local_peer_id, |sender_opt| {
+        self.find_sender_and_then(local_peer_id, |sender_opt| Box::pin(async move {
             if let Some(sender) = sender_opt {
                 sender.update_bind_state(client_id, server_id, iface_id, new_state);
                 let remote_id = if local_peer_id == client_id {
@@ -572,12 +561,12 @@ impl RouterShared {
                 };
                 sender.update_remote_bind_state(remote_id, client_id, server_id, iface_id, new_state);
             }
-        });
+        })).await;
     }
 
-    fn remove_bind(&mut self, local_peer_id: u32, client_id: u32, server_id: u32, iface_id: u16) {
+    async fn remove_bind(&mut self, local_peer_id: u32, client_id: u32, server_id: u32, iface_id: u16) {
         // Remove the bind
-        self.find_sender_and_then(local_peer_id, |sender_opt| {
+        self.find_sender_and_then(local_peer_id, |sender_opt| Box::pin(async move {
             if let Some(sender) = sender_opt {
                 sender.remove_bind(client_id, server_id, iface_id);
                 let remote_id = if local_peer_id == client_id {
@@ -587,15 +576,15 @@ impl RouterShared {
                 };
                 sender.remove_remote_bind(remote_id, client_id, server_id, iface_id);
             }
-        });
+        })).await;
     }
 
-    fn forward_msg(&mut self, msg: CowRpcMessage) {
+    async fn forward_msg(&mut self, msg: CowRpcMessage) {
         let dst_id = msg.get_dst_id();
 
         if (dst_id & 0xFFFF_0000) != self.inner.id {
-            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read() {
-                match router_sender.send_messages(msg.clone()) {
+            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
+                match router_sender.send_messages(msg.clone()).await {
                     Ok(_) => {
                         return;
                     }
@@ -607,9 +596,10 @@ impl RouterShared {
                 error!("can't send message to the other router: multi_router_peer is None (nats is probably not configured)");
             }
         } else {
-            if self.find_sender_and_then(dst_id, |sender_opt| {
+            let msg_clone = msg.clone();
+            if self.find_sender_and_then(dst_id, |sender_opt| Box::pin(async move {
                 if let Some(sender_ref) = sender_opt {
-                    if let Err(e) = sender_ref.send_messages(msg.clone()) {
+                    if let Err(e) = sender_ref.send_messages(msg_clone).await {
                         warn!("Send message to peer ID {} failed: {}", dst_id, e);
                         sender_ref.set_connection_error();
                     } else {
@@ -617,7 +607,7 @@ impl RouterShared {
                     }
                 }
                 false
-            }) {
+            })).await {
                 return;
             } else if msg.is_unbind() {
                 return;
@@ -642,7 +632,7 @@ impl RouterShared {
                     let src_id = msg.get_src_id();
 
                     if (src_id & 0xFFFF_0000) != self.inner.id {
-                        if let Some(ref router_sender) = &*self.inner.multi_router_peer.read() {
+                        if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
                             let mut msg_clone = msg.clone();
                             msg_clone.swap_src_dst();
                             let flag: u16 = CowRpcErrorCode::Unreachable.into();
@@ -651,7 +641,7 @@ impl RouterShared {
                             let _ = router_sender.send_messages(msg_clone);
                         }
                     } else {
-                        self.find_sender_and_then(src_id, |sender_opt| {
+                        self.find_sender_and_then(src_id, |sender_opt| Box::pin(async move {
                             if let Some(sender_ref) = sender_opt {
                                 let mut msg_clone = msg.clone();
                                 msg_clone.swap_src_dst();
@@ -663,7 +653,7 @@ impl RouterShared {
                                     sender_ref.set_connection_error();
                                 });
                             }
-                        });
+                        })).await;
                     }
                 }
             }
@@ -674,7 +664,7 @@ impl RouterShared {
 
                     for iface in msg.ifaces {
                         if (src_id & 0xFFFF_0000) != self.inner.id {
-                            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read() {
+                            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
                                 // Send Unbind req
                                 let iface_defs = vec![iface];
 
@@ -694,11 +684,11 @@ impl RouterShared {
                                 let _ = router_sender.send_messages(CowRpcMessage::Unbind(header, msg));
                             }
                         } else {
-                            self.find_sender_and_then(dst_id, |sender_opt| {
+                            self.find_sender_and_then(dst_id, |sender_opt| Box::pin(async move {
                                 if let Some(sender_ref) = sender_opt {
                                     sender_ref.send_unbind_req(hdr.dst_id, hdr.src_id, iface.id);
                                 }
-                            });
+                            })).await;
                         }
                     }
                 }
@@ -707,7 +697,7 @@ impl RouterShared {
         }
     }
 
-    fn send_call_result_failure(&mut self, header_received: &CowRpcHdr, msg_received: &CowRpcCallMsg, flag: u16) {
+    async fn send_call_result_failure(&mut self, header_received: &CowRpcHdr, msg_received: &CowRpcCallMsg, flag: u16) {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_RESULT_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
@@ -728,11 +718,11 @@ impl RouterShared {
         let dst_id = header_received.src_id;
 
         if (dst_id & 0xFFFF_0000) != self.inner.id {
-            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read() {
+            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
                 let _ = router_sender.send_messages(CowRpcMessage::Result(header, msg, Vec::new()));
             }
         } else {
-            self.find_sender_and_then(dst_id, |sender_opt| {
+            self.find_sender_and_then(dst_id, |sender_opt| Box::pin(async move {
                 if let Some(sender_ref) = sender_opt {
                     sender_ref
                         .send_messages(CowRpcMessage::Result(header, msg, Vec::new()))
@@ -741,7 +731,7 @@ impl RouterShared {
                             sender_ref.set_connection_error();
                         });
                 }
-            });
+            })).await;
         }
     }
 
@@ -830,7 +820,7 @@ pub struct CowRpcRouterPeer {
     reader_stream: Arc<Mutex<CowStreamEx<CowRpcMessage>>>,
     router: RouterShared,
 
-    process_msg_fut: Option<Compat<BoxFuture<'static, Result<()>>>>,
+    process_msg_fut: Option<BoxFuture<'static, Result<()>>>,
 }
 
 impl Clone for CowRpcRouterPeer {
@@ -850,11 +840,11 @@ pub struct CowRpcRouterPeerSender {
 }
 
 impl CowRpcRouterPeerSender {
-    fn set_connection_error(&self) {
-        *self.inner.state.write() = CowRpcRouterPeerState::Error;
+    async fn set_connection_error(&self) {
+        *self.inner.state.write().await = CowRpcRouterPeerState::Error;
     }
 
-    fn send_unbind_req(&self, client_id: u32, server_id: u32, iface_id: u16) {
+    async fn send_unbind_req(&self, client_id: u32, server_id: u32, iface_id: u16) {
         let iface_def = CowRpcIfaceDef {
             id: iface_id,
             flags: COW_RPC_DEF_FLAG_EMPTY,
@@ -883,8 +873,9 @@ impl CowRpcRouterPeerSender {
         let _ = self.send_messages(CowRpcMessage::Unbind(header, msg));
     }
 
-    fn send_messages(&self, msg: CowRpcMessage) -> Result<()> {
-        self.inner.writer_sink.lock().start_send(msg).map(|_| ())
+    async fn send_messages(&self, msg: CowRpcMessage) -> Result<()> {
+        self.inner.writer_sink.lock().await.send(msg).await
+        //self.inner.writer_sink.lock().start_send(msg).map(|_| ())
     }
 
     fn add_remote_bind(&self, remote_id: u32, client_id: u32, server_id: u32, iface_id: u16) {
@@ -979,73 +970,73 @@ impl CowRpcRouterPeerSender {
 }
 
 impl Future for CowRpcRouterPeer {
-    type Item = (u32, Option<CowRpcIdentity>);
-    type Error = (u32, Option<CowRpcIdentity>, CowRpcError);
+    type Output = std::result::Result<(u32, Option<CowRpcIdentity>), (u32, Option<CowRpcIdentity>, CowRpcError)>;
 
-    fn poll(&mut self) -> std::result::Result<Async<<Self as Future>::Item>, <Self as Future>::Error> {
-        loop {
-            match self.process_msg_fut.take() {
-                Some(mut fut) => {
-                   match fut.poll() {
-                       Ok(Async::NotReady) => {
-                           self.process_msg_fut = Some(fut);
-                           return Ok(Async::NotReady);
-                       }
-                       Err(e) => {
-                           return Err((self.inner.cow_id, self.identity.read().clone(), e));
-                       }
-                       _ => {}
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // TODO
+        // loop {
+        //     match self.process_msg_fut.take() {
+        //         Some(mut fut) => {
+        //             match fut.poll() {
+        //                 Poll::Pending => {
+        //                     self.process_msg_fut = Some(fut);
+        //                     return Poll::Pending;
+        //                 }
+        //                 Poll::Ready(Err(e)) => {
+        //                     return Poll::Ready(Err((self.inner.cow_id, self.identity.read().await.clone(), e)));
+        //                 }
+        //                 _ => {}
+        //
+        //             }
+        //         }
+        //         None => {
+        //             let res = {
+        //                 let mut lock = self.reader_stream.lock();
+        //                 lock.poll()
+        //             };
+        //             match *res {
+        //                 Poll::Ready(Ok(Some(msg))) => {
+        //                     let peer = self.clone();
+        //                     self.process_msg_fut = Some(CowRpcRouterPeer::process_msg(peer, msg));
+        //                     self.poll().map_err(|(_, _, e)| (self.inner.cow_id, self.identity.read().await.clone(), e))?;
+        //                 }
+        //                 Poll::Pending => {
+        //                     break; // nothing to do with that
+        //                 }
+        //                 Poll::Ready(Ok(None)) => {
+        //                     return Poll::Ready(Ok((self.inner.cow_id, self.identity.read().await.clone()))); // means the transport is disconnected
+        //                 }
+        //                 Poll::Ready(Err(e)) => {
+        //                     return Poll::Ready(Err((self.inner.cow_id, self.identity.read().await.clone(), e)));
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+        // {
+        //     self.inner
+        //         .writer_sink
+        //         .lock()
+        //         .poll_complete()
+        //         .map_err(|e| (self.inner.cow_id, self.identity.read().await.clone(), e))?;
+        // }
+        // {
+        //     match &*self.inner.state.read().await {
+        //         CowRpcRouterPeerState::Error => {
+        //             return Poll::Ready(Err((
+        //                 self.inner.cow_id,
+        //                 self.identity.read().await.clone(),
+        //                 CowRpcError::Internal("An error occured while polling the peer connection".to_string()),
+        //             )));
+        //         }
+        //         CowRpcRouterPeerState::Terminated => {
+        //             return Poll::Ready(Ok((self.inner.cow_id, self.identity.read().await.clone())));
+        //         }
+        //         _ => {}
+        //     }
+        // }
 
-                   }
-                }
-                None => {
-                    let res = {
-                        let mut lock = self.reader_stream. lock();
-                        lock.poll()
-                    };
-                    match res {
-                        Ok(Async::Ready(Some(msg))) => {
-                            let peer = self.clone();
-                            self.process_msg_fut = Some(Compat::new(Box::pin(CowRpcRouterPeer::process_msg(peer, msg))));
-                            self.poll().map_err(|(_, _, e)| (self.inner.cow_id, self.identity.read().clone(), e))?;
-                        }
-                        Ok(Async::NotReady) => {
-                            break; // nothing to do with that
-                        }
-                        Ok(Async::Ready(None)) => {
-                            return Ok(Async::Ready((self.inner.cow_id, self.identity.read().clone()))); // means the transport is disconnected
-                        }
-                        Err(e) => {
-                            return Err((self.inner.cow_id, self.identity.read().clone(), e));
-                        }
-                    }
-                }
-            }
-        }
-        {
-            self.inner
-                .writer_sink
-                .lock()
-                .poll_complete()
-                .map_err(|e| (self.inner.cow_id, self.identity.read().clone(), e))?;
-        }
-        {
-            match &*self.inner.state.read() {
-                CowRpcRouterPeerState::Error => {
-                    return Err((
-                        self.inner.cow_id,
-                        self.identity.read().clone(),
-                        CowRpcError::Internal("An error occured while polling the peer connection".to_string()),
-                    ));
-                }
-                CowRpcRouterPeerState::Terminated => {
-                    return Ok(Async::Ready((self.inner.cow_id, self.identity.read().clone())));
-                }
-                _ => {}
-            }
-        }
-
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 
@@ -1082,8 +1073,8 @@ impl CowRpcRouterPeer {
         router: RouterShared
     ) -> Result<(CowRpcRouterPeer, CowRpcRouterPeerSender)> {
         let mut transport = transport;
-        let reader_stream = transport.message_stream();
-        let (peer, peer_sender) = match reader_stream.compat().next().await {
+        let mut reader_stream = transport.message_stream();
+        let (peer, peer_sender) = match reader_stream.next().await {
             Some(msg) => match msg? {
                 CowRpcMessage::Handshake(hdr, msg) => {
                     if !hdr.is_response() {
@@ -1111,8 +1102,8 @@ impl CowRpcRouterPeer {
                                 process_msg_fut: None,
                             };
 
-                            peer.send_handshake_rsp(flag)?;
-                            peer.inner.writer_sink.lock().poll_complete()?;
+                            peer.send_handshake_rsp(flag).await?;
+                            // peer.inner.writer_sink.lock().poll_complete()?;
 
                             return Err(CowRpcError::Proto(
                                 "Handshake used the direct connection flag, shutting down the connection".to_string(),
@@ -1146,8 +1137,8 @@ impl CowRpcRouterPeer {
                                 )
                             };
 
-                            peer.send_handshake_rsp(flag)?;
-                            peer.inner.writer_sink.lock().poll_complete()?;
+                            peer.send_handshake_rsp(flag).await?;
+                            // peer.inner.writer_sink.lock().poll_complete()?;
 
                             (peer, peer_sender)
                         }
@@ -1180,7 +1171,7 @@ impl CowRpcRouterPeer {
             }
             CowRpcMessage::Register(hdr, msg) => {
                 if !hdr.is_response() {
-                    self.process_register_req(hdr, msg)?;
+                    self.process_register_req(hdr, msg).await?;
                 } else {
                     error!(
                         "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}",
@@ -1191,7 +1182,7 @@ impl CowRpcRouterPeer {
 
             CowRpcMessage::Identity(hdr, msg) => {
                 if !hdr.is_response() {
-                    self.process_identify_req(hdr, msg)?;
+                    self.process_identify_req(hdr, msg).await?;
                 } else {
                     error!(
                         "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}",
@@ -1202,7 +1193,7 @@ impl CowRpcRouterPeer {
 
             CowRpcMessage::Resolve(hdr, msg) => {
                 if !hdr.is_response() {
-                    self.process_resolve_req(hdr, msg)?;
+                    self.process_resolve_req(hdr, msg).await?;
                 } else {
                     error!(
                         "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}",
@@ -1213,7 +1204,7 @@ impl CowRpcRouterPeer {
 
             CowRpcMessage::Terminate(hdr) => {
                 if !hdr.is_response() {
-                    self.process_terminate_req(hdr)?;
+                    self.process_terminate_req(hdr).await?;
                 } else {
                     error!("CowRpc Protocol Error: Router can't process a response: hdr={:?}", hdr);
                 }
@@ -1228,31 +1219,31 @@ impl CowRpcRouterPeer {
             }
 
             msg => {
-                self.router.process_msg(msg);
+                self.router.process_msg(msg).await;
             }
         }
 
         Ok(())
     }
 
-    fn process_register_req(&mut self, _: CowRpcHdr, msg: CowRpcRegisterMsg) -> Result<()> {
+    async fn process_register_req(&mut self, _: CowRpcHdr, msg: CowRpcRegisterMsg) -> Result<()> {
         let mut msg_clone = msg.clone();
 
         for mut iface in &mut msg_clone.ifaces {
-            if let Err(e) = self.router.register_iface_def(&mut iface) {
+            if let Err(e) = self.router.register_iface_def(&mut iface).await {
                 error!("Registering iface failed, {:?}", e);
                 iface.flags = CowRpcErrorCode::Internal.into();
             }
         }
 
-        self.send_register_rsp(msg_clone.ifaces)?;
+        self.send_register_rsp(msg_clone.ifaces).await?;
         Ok(())
     }
 
-    fn process_identify_req(&mut self, _: CowRpcHdr, msg: CowRpcIdentityMsg) -> Result<()> {
+    async fn process_identify_req(&mut self, _: CowRpcHdr, msg: CowRpcIdentityMsg) -> Result<()> {
         // Identify is not supported, verify has to be used.
         let flag = CowRpcErrorCode::Unauthorized;
-        self.send_identify_rsp(flag.into(), msg)?;
+        self.send_identify_rsp(flag.into(), msg).await?;
         Ok(())
     }
 
@@ -1271,7 +1262,7 @@ impl CowRpcRouterPeer {
                 // to request the den identity (except the den itself of course) since a pop-token has been validated.
                 if identity.eq("den") {
                     identity = format!("den{}", self.router.inner.id);
-                    self.reader_stream.lock().close_on_keep_alive_timeout(false);
+                    self.reader_stream.lock().await.close_on_keep_alive_timeout(false);
                 }
 
                 let identity = CowRpcIdentity {
@@ -1283,7 +1274,7 @@ impl CowRpcRouterPeer {
                 let cow_id = self.inner.cow_id;
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
-                        *self.identity.write() = Some(identity);
+                        *self.identity.write().await = Some(identity);
                     }
                     Err(e) => {
                         warn!(
@@ -1299,11 +1290,11 @@ impl CowRpcRouterPeer {
             }
         }
 
-        self.send_verify_rsp(flag.into(), msg, rsp)?;
+        self.send_verify_rsp(flag.into(), msg, rsp).await?;
         Ok(())
     }
 
-    fn process_resolve_req(&mut self, header: CowRpcHdr, msg: CowRpcResolveMsg) -> Result<()> {
+    async fn process_resolve_req(&mut self, header: CowRpcHdr, msg: CowRpcResolveMsg) -> Result<()> {
         let mut flag: u16 = CowRpcErrorCode::NotFound.into();
         let mut msg_clone = msg.clone();
 
@@ -1362,17 +1353,17 @@ impl CowRpcRouterPeer {
             }
         }
 
-        self.send_resolve_rsp(flag, msg_clone)?;
+        self.send_resolve_rsp(flag, msg_clone).await?;
         Ok(())
     }
 
-    fn process_terminate_req(&mut self, _: CowRpcHdr) -> Result<()> {
-        *self.inner.state.write() = CowRpcRouterPeerState::Terminated;
-        self.send_terminate_rsp()?;
+    async fn process_terminate_req(&mut self, _: CowRpcHdr) -> Result<()> {
+        *self.inner.state.write().await = CowRpcRouterPeerState::Terminated;
+        self.send_terminate_rsp().await?;
         Ok(())
     }
 
-    fn send_handshake_rsp(&mut self, flag: u16) -> Result<()> {
+    async fn send_handshake_rsp(&mut self, flag: u16) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
@@ -1386,11 +1377,11 @@ impl CowRpcRouterPeer {
         header.size = header.get_size() + msg.get_size();
         header.offset = header.size as u8;
 
-        self.send_messages(CowRpcMessage::Handshake(header, msg))?;
+        self.send_messages(CowRpcMessage::Handshake(header, msg)).await?;
         Ok(())
     }
 
-    fn send_register_rsp(&mut self, ifaces: Vec<CowRpcIfaceDef>) -> Result<()> {
+    async fn send_register_rsp(&mut self, ifaces: Vec<CowRpcIfaceDef>) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_REGISTER_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE,
@@ -1404,11 +1395,11 @@ impl CowRpcRouterPeer {
         header.size = header.get_size() + msg.get_size();
         header.offset = header.get_size() as u8;
 
-        self.send_messages(CowRpcMessage::Register(header, msg))?;
+        self.send_messages(CowRpcMessage::Register(header, msg)).await?;
         Ok(())
     }
 
-    fn send_identify_rsp(&mut self, flag: u16, msg: CowRpcIdentityMsg) -> Result<()> {
+    async fn send_identify_rsp(&mut self, flag: u16, msg: CowRpcIdentityMsg) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_IDENTIFY_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
@@ -1420,11 +1411,11 @@ impl CowRpcRouterPeer {
         header.size = header.get_size() + msg.get_size();
         header.offset = header.get_size() as u8;
 
-        self.send_messages(CowRpcMessage::Identity(header, msg))?;
+        self.send_messages(CowRpcMessage::Identity(header, msg)).await?;
         Ok(())
     }
 
-    fn send_verify_rsp(&mut self, flag: u16, msg: CowRpcVerifyMsg, payload: Vec<u8>) -> Result<()> {
+    async fn send_verify_rsp(&mut self, flag: u16, msg: CowRpcVerifyMsg, payload: Vec<u8>) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_VERIFY_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
@@ -1436,11 +1427,11 @@ impl CowRpcRouterPeer {
         header.size = header.get_size() + msg.get_size() + payload.len() as u32;
         header.offset = (header.get_size() + msg.get_size()) as u8;
 
-        self.send_messages(CowRpcMessage::Verify(header, msg, payload))?;
+        self.send_messages(CowRpcMessage::Verify(header, msg, payload)).await?;
         Ok(())
     }
 
-    fn send_resolve_rsp(&mut self, flag: u16, msg: CowRpcResolveMsg) -> Result<()> {
+    async fn send_resolve_rsp(&mut self, flag: u16, msg: CowRpcResolveMsg) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_RESOLVE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
@@ -1452,11 +1443,11 @@ impl CowRpcRouterPeer {
         header.size = header.get_size() + msg.get_size(header.flags);
         header.offset = header.get_size() as u8;
 
-        self.send_messages(CowRpcMessage::Resolve(header, msg))?;
+        self.send_messages(CowRpcMessage::Resolve(header, msg)).await?;
         Ok(())
     }
 
-    fn send_terminate_rsp(&mut self) -> Result<()> {
+    async fn send_terminate_rsp(&mut self) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_TERMINATE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE,
@@ -1468,12 +1459,13 @@ impl CowRpcRouterPeer {
         header.size = header.get_size();
         header.offset = header.size as u8;
 
-        self.send_messages(CowRpcMessage::Terminate(header))?;
+        self.send_messages(CowRpcMessage::Terminate(header)).await?;
         Ok(())
     }
 
-    fn send_messages(&mut self, msg: CowRpcMessage) -> Result<()> {
-        self.inner.writer_sink.lock().start_send(msg).map(|_| ())
+    async fn send_messages(&mut self, msg: CowRpcMessage) -> Result<()> {
+        self.inner.writer_sink.lock().await.send(msg).await
+        // self.inner.writer_sink.lock().start_send(msg).map(|_| ())
     }
 }
 
@@ -1730,21 +1722,22 @@ struct RouterIface {
     procs: Arc<RwLock<HashMap<String, RouterProc>>>,
 }
 
-impl std::fmt::Display for RouterIface {
-    fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
-        writeln!(f, "Iface \"{}\" id: {}", self.name, self.id)?;
-        writeln!(f, "|")?;
-        for procedure in self.procs.read().iter() {
-            writeln!(f, "    Proc \"{}\" id: {}", procedure.1.name, procedure.1.id)?;
-        }
-        writeln!(f, "|")?;
-        Ok(())
-    }
-}
+// TODO
+// impl std::fmt::Display for RouterIface {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
+//         writeln!(f, "Iface \"{}\" id: {}", self.name, self.id)?;
+//         writeln!(f, "|")?;
+//         for procedure in self.procs.read().iter() {
+//             writeln!(f, "    Proc \"{}\" id: {}", procedure.1.name, procedure.1.id)?;
+//         }
+//         writeln!(f, "|")?;
+//         Ok(())
+//     }
+// }
 
 impl RouterIface {
-    pub fn contains_proc(&self, name: &str) -> bool {
-        self.procs.read().contains_key(name)
+    pub async fn contains_proc(&self, name: &str) -> bool {
+        self.procs.read().await.contains_key(name)
     }
 }
 
@@ -1759,21 +1752,21 @@ impl RouterIfaceCollection {
     const COW_IFACES_SET: &'static str = "cow_ifaces";
     const COW_PROCS_SET: &'static str = "cow_procs";
 
-    fn new(cache: Cache) -> Self {
+    async fn new(cache: Cache) -> Self {
         let coll = RouterIfaceCollection {
             cache,
             iface_list: RwLock::new(HashMap::new()),
         };
 
-        if let Err(e) = coll.load_from_cache() {
+        if let Err(e) = coll.load_from_cache().await {
             error!("Unable to load CowRpcIfaces from cache: {}", e);
         }
 
         coll
     }
 
-    fn load_from_cache(&self) -> Result<()> {
-        let mut list_mut = self.iface_list.write();
+    async fn load_from_cache(&self) -> Result<()> {
+        let mut list_mut = self.iface_list.write().await;
 
         let members = self.cache.set_members(Self::COW_IFACES_SET)?;
 
@@ -1804,7 +1797,8 @@ impl RouterIfaceCollection {
 
             let iface = RouterIface { id, name, procs };
 
-            info!("Loaded interface from cache : \n {}", iface);
+            // TODO: impl Display to iface
+            //info!("Loaded interface from cache : \n {}", iface);
 
             list_mut.insert(member.clone(), iface);
         }
@@ -1812,7 +1806,7 @@ impl RouterIfaceCollection {
         Ok(())
     }
 
-    pub fn add(&self, iface_def: &mut CowRpcIfaceDef) -> Result<()> {
+    pub async fn add(&self, iface_def: &mut CowRpcIfaceDef) -> Result<()> {
         let mut new_iface = false;
         self.add_to_cache(iface_def)?;
 
@@ -1823,7 +1817,7 @@ impl RouterIfaceCollection {
             ref procs,
         } = iface_def;
 
-        let mut list_mut = self.iface_list.write();
+        let mut list_mut = self.iface_list.write().await;
 
         if !list_mut.contains_key(iface_name) {
             new_iface = true;
@@ -1847,10 +1841,10 @@ impl RouterIfaceCollection {
                 name: ref proc_name,
             } = p;
 
-            if router_iface.contains_proc(proc_name) {
+            if router_iface.contains_proc(proc_name).await {
                 continue;
             } else {
-                let mut proc_list = router_iface.procs.write();
+                let mut proc_list = router_iface.procs.write().await;
                 proc_list.insert(
                     proc_name.clone(),
                     RouterProc {
@@ -1862,7 +1856,8 @@ impl RouterIfaceCollection {
         }
 
         if new_iface {
-            info!("Added interface : \n {}", router_iface);
+            // TODO: impl Display to iface
+            //info!("Added interface : \n {}", router_iface);
         }
 
         Ok(())
@@ -2040,3 +2035,5 @@ impl RouterCache {
         Ok(())
     }
 }
+
+

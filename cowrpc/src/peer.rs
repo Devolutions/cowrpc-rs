@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use mio_extras::channel::channel;
-use mio_extras::channel::{Receiver, Sender};
-use mio_extras::timer::Timer;
+// use mio_extras::channel::channel;
+// use mio_extras::channel::{Receiver, Sender};
+// use mio_extras::timer::Timer;
 
 use crate::cancel_event::{CancelEvent, CancelEventHandle};
 use crate::error::CowRpcError;

@@ -1,4 +1,5 @@
-use mio_extras;
+//TODO FD REMOVE
+//use mio_extras;
 use mouscache;
 use crate::proto;
 use crate::proto::*;
@@ -72,11 +73,11 @@ impl From<std::sync::mpsc::TryRecvError> for CowRpcError {
     }
 }
 
-impl From<mio_extras::channel::SendError<proto::CowRpcMessage>> for CowRpcError {
-    fn from(error: mio_extras::channel::SendError<proto::CowRpcMessage>) -> Self {
-        CowRpcError::Internal(format!("mio_extras::channel::SendError: {}", error))
-    }
-}
+// impl From<mio_extras::channel::SendError<proto::CowRpcMessage>> for CowRpcError {
+//     fn from(error: mio_extras::channel::SendError<proto::CowRpcMessage>) -> Self {
+//         CowRpcError::Internal(format!("mio_extras::channel::SendError: {}", error))
+//     }
+// }
 
 impl From<mouscache::CacheError> for CowRpcError {
     fn from(e: mouscache::CacheError) -> Self {

@@ -1,19 +1,19 @@
 use std::net::SocketAddr;
 
-use futures::future::{err, ok};
-use futures::{Future, Stream};
+use futures_01::future::{err, ok};
+use futures_01::{Future, Stream};
 
 use tls_api::HandshakeError as TlsHandshakeError;
 use tls_api::{TlsAcceptor, TlsAcceptorBuilder, TlsStream};
 use tls_api_native_tls::TlsAcceptor as NativeTlsAcceptor;
 use tls_api_native_tls::TlsAcceptorBuilder as NativeTlsAcceptorBuilder;
-use tungstenite::HandshakeError;
-use tungstenite::{
+use async_tungstenite::tungstenite::HandshakeError;
+use async_tungstenite::tungstenite::{
     handshake::server::{NoCallback, ServerHandshake},
     stream::Stream as StreamSwitcher,
 };
-use futures_03::compat::Future01CompatExt;
-use futures_03::future::TryFutureExt;
+use futures::compat::Future01CompatExt;
+use futures::future::TryFutureExt;
 
 
 use crate::error::{CowRpcError, Result};
@@ -22,8 +22,9 @@ use crate::transport::{
     MessageInterceptor, TransportError,
     tls::{Identity, TlsOptions, TlsOptionsType},
 };
-use tokio_tcp::TcpStream;
-use tokio_tcp::TcpListener as TcpTokioListener;
+use tokio::net::TcpStream;
+use tokio::net::TcpListener as TcpTokioListener;
+use async_tungstenite::tokio::accept_async;
 
 pub type WebSocketStream = StreamSwitcher<TcpStream, TlsStream<TcpStream>>;
 
@@ -88,7 +89,7 @@ impl Listener for WebSocketListener {
     }
 
     fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
-        let WebSocketListener { listener, tls_acceptor, transport_cb_handler } = self;
+        let WebSocketListener { mut listener, tls_acceptor, transport_cb_handler } = self;
 
         Box::new(listener.incoming().map_err(|e| e.into()).map(move |tcp_stream| {
             let tls_acceptor_clone = match tls_acceptor {
@@ -100,13 +101,14 @@ impl Listener for WebSocketListener {
             let fut: CowFuture<WebSocketTransport> = Box::new(
                 wrap_stream_async(&tls_acceptor_clone, tcp_stream).and_then(move |ws_stream| {
                     let fut: CowFuture<WebSocketTransport> =
-                        match ServerHandshake::start(ws_stream, NoCallback, None).handshake() {
+                        //match ServerHandshake::start(ws_stream, NoCallback, None).handshake() {
+                    async {
+                        match accept_async(ws_stream).await {
                             Ok(ws) => Box::new(ok(WebSocketTransport::new_server(
                                 ws,
                                 transport_cb_handler_clone.clone(),
                             ))),
                             Err(HandshakeError::Interrupted(m)) => Box::new(
-
                                 tokio::time::timeout(::std::time::Duration::from_secs(5),
                                                      ServerWebSocketHandshake(Some(m)).compat()).compat()
                                     .map_err(|_| CowRpcError::Internal("timed out".to_string()))
@@ -129,6 +131,7 @@ impl Listener for WebSocketListener {
                                 Box::new(err(TransportError::UnableToConnect.into()))
                             }
                         };
+                    };
                     fut
                 }),
             );
