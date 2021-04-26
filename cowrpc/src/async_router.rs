@@ -188,7 +188,7 @@ impl CowRpcRouter {
             listener_builder = listener_builder.with_ssl(tls);
         }
 
-        let listener = listener_builder.build().await?;
+        let mut listener = listener_builder.build().await?;
 
         let incoming = listener.incoming().await;
         let router_peer_stream = incoming.for_each(move |transport| {

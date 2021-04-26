@@ -31,7 +31,7 @@ futures_01 = { package = "futures", version = "0.1.29" }
 futures = { version = "0.3", features = ["compat"] }
 pin-utils = "0.1"
 parking_lot = "0.6"
-tokio = { version = "0.2.11", features = ["full", "sync"] }
+tokio = { version = "0.2.25", features = ["full", "sync"] }
 # todo fd remove
 #tokio-tcp = "0.1.2"
 tls-api = { git = "https://github.com/devolutions/rust-tls-api", branch = "wayk" }

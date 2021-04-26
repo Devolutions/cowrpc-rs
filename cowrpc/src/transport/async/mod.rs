@@ -192,7 +192,7 @@ impl CowRpcListener {
 
     pub async fn incoming(self) -> CowStream<CowFuture<CowRpcTransport>> {
         match self {
-            CowRpcListener::Tcp(tcp) => {
+            CowRpcListener::Tcp(mut tcp) => {
                 let incoming = tcp.incoming();
                 Box::new(futures::StreamExt::map(incoming, |result| {
                     let fut = result?;
@@ -235,6 +235,7 @@ pub trait Transport {
             Self: Sized;
     fn message_sink(&mut self) -> CowSink<CowRpcMessage>;
     fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage>;
+    fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>);
     fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
     fn set_keep_alive_interval(&mut self, interval: Option<Duration>);
     fn local_addr(&self) -> Option<SocketAddr>;
@@ -290,6 +291,13 @@ impl Transport for CowRpcTransport {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.message_stream(),
             // CowRpcTransport::WebSocket(ref mut ws) => ws.message_stream(),
             CowRpcTransport::Interceptor(ref mut inter) => inter.message_stream(),
+        }
+    }
+
+    fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
+        match self {
+            CowRpcTransport::Tcp(tcp) => tcp.message_stream_sink(),
+            CowRpcTransport::Interceptor(inter) => inter.message_stream_sink(),
         }
     }
 

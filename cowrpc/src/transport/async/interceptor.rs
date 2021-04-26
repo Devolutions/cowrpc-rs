@@ -42,6 +42,10 @@ impl Transport for InterceptorTransport {
         unreachable!("Cannot call message_stream on the interceptor transport")
     }
 
+    fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
+        todo!()
+    }
+
     fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.inter = cb_handler;
     }
@@ -71,7 +75,9 @@ impl Sink<CowRpcMessage> for InterceptorSink {
     type Error = CowRpcError;
 
     fn start_send(self: Pin<&mut Self>, item: CowRpcMessage) -> Result<()> {
-        if let Some(msg) = self.inter.before_send(item) {
+        let this = self.get_mut();
+
+        if let Some(msg) = this.inter.before_send(item) {
             Err(TransportError::EndpointUnreachable(format!(
                 "Unable to send msg {} trought interceptor, peer {} is inside this router",
                 msg.get_msg_name(),

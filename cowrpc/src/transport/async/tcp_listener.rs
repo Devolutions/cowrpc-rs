@@ -47,15 +47,9 @@ impl Listener for TcpListener {
             transport_cb_handler,
         } = self;
 
-        let cbh = if let Some(ref cbh) = transport_cb_handler {
-            Some(cbh.clone_boxed())
-        } else {
-            None
-        };
-
-        let incoming = listener.incoming();
-        Box::new(incoming.map(|stream| {
+        Box::new(listener.map(move |stream| {
             let tcp_stream = stream?;
+            let cbh = transport_cb_handler.clone();
             Ok(Box::new(future::ok(TcpTransport::new(tcp_stream, cbh))) as CowFuture<TcpTransport>)
         })) as CowStream<CowFuture<Self::TransportInstance>>
     }

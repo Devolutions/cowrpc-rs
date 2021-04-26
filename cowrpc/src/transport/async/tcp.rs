@@ -18,6 +18,9 @@ use std::pin::Pin;
 use tokio::net::TcpStream;
 use std::io::Error;
 use async_trait::async_trait;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use crate::tokio::io::{AsyncReadExt, AsyncWriteExt};
+use futures::ready;
 
 pub struct TcpTransport {
     stream: TcpStream,
@@ -85,29 +88,49 @@ impl Transport for TcpTransport {
     }
 
     fn message_sink(&mut self) -> CowSink<CowRpcMessage> {
-        let stream = self
-            .stream
-            .try_clone()
-            .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
-
-        Box::new(CowMessageSink {
-            stream,
-            data_to_send: Vec::new(),
-            callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-        })
+        todo!()
+        // let stream = self
+        //     .stream
+        //     .try_clone()
+        //     .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
+        //
+        // Box::new(CowMessageSink {
+        //     stream,
+        //     data_to_send: Vec::new(),
+        //     callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
+        // })
     }
 
     fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage> {
-        let stream = self
-            .stream
-            .try_clone()
-            .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
+        todo!()
+        // let stream = self
+        //     .stream
+        //     .try_clone()
+        //     .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
+        //
+        // Box::new(CowMessageStream {
+        //     stream,
+        //     data_received: Vec::new(),
+        //     callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
+        // })
+    }
 
-        Box::new(CowMessageStream {
-            stream,
+    fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
+        let (reader, writer) = self.stream.into_split();
+
+        let sink = Box::new(CowMessageSink {
+            stream: writer,
+            data_to_send: Vec::new(),
+            callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
+        });
+
+        let stream = Box::new(CowMessageStream {
+            stream: reader,
             data_received: Vec::new(),
             callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-        })
+        });
+
+        (stream, sink)
     }
 
     fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
@@ -132,7 +155,7 @@ impl Transport for TcpTransport {
 }
 
 pub struct CowMessageStream {
-    pub stream: TcpStream,
+    pub stream: OwnedReadHalf,
     pub data_received: Vec<u8>,
     pub callback_handler: Option<Box<dyn MessageInterceptor>>,
 }
@@ -141,21 +164,22 @@ impl Stream for CowMessageStream {
     type Item = Result<CowRpcMessage, CowRpcError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
         {
-            let data_len = self.data_received.len();
+            let data_len = this.data_received.len();
             if data_len > 4 {
-                let msg_len = self.data_received.as_slice().read_u32::<LittleEndian>()? as usize;
+                let msg_len = ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize ;//.read_u32::<LittleEndian>()? as usize;
                 if data_len >= msg_len {
                     let msg;
                     let v: Vec<u8>;
                     {
-                        let mut slice: &[u8] = &self.data_received;
+                        let mut slice: &[u8] = &this.data_received;
                         msg = CowRpcMessage::read_from(&mut slice)?;
                         v = slice.to_vec();
                     }
-                    self.data_received = v;
+                    this.data_received = v;
 
-                    if let Some(ref mut interceptor) = self.callback_handler {
+                    if let Some(ref mut interceptor) = this.callback_handler {
                         match interceptor.before_recv(msg) {
                             Some(msg) => {
                                 debug!("<< {}", msg.get_msg_info());
@@ -173,7 +197,7 @@ impl Stream for CowMessageStream {
 
         loop {
             let mut buff = [0u8; 4096];
-            let result = self.stream.read(&mut buff);
+            let result = ready!(this.stream.read(&mut buff).poll_unpin(cx));
             match result {
                 Ok(0) => {
                     return Poll::Ready(None);
@@ -182,21 +206,21 @@ impl Stream for CowMessageStream {
                     let data_len = n;
                     let mut buff = buff.to_vec();
                     buff.truncate(data_len);
-                    self.data_received.append(&mut buff);
+                    this.data_received.append(&mut buff);
 
                     if data_len > 4 {
-                        let msg_len = self.data_received.as_slice().read_u32::<LittleEndian>()? as usize;
+                        let msg_len = ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize;
                         if data_len >= msg_len {
                             let msg;
                             let v: Vec<u8>;
                             {
-                                let mut slice: &[u8] = &self.data_received;
+                                let mut slice: &[u8] = &this.data_received;
                                 msg = CowRpcMessage::read_from(&mut slice)?;
                                 v = slice.to_vec();
                             }
-                            self.data_received = v;
+                            this.data_received = v;
 
-                            if let Some(ref mut interceptor) = self.callback_handler {
+                            if let Some(ref mut interceptor) = this.callback_handler {
                                 match interceptor.before_recv(msg) {
                                     Some(msg) => {
                                         debug!("<< {}", msg.get_msg_info());
@@ -230,7 +254,7 @@ impl StreamEx for CowMessageStream {
 }
 
 pub struct CowMessageSink {
-    pub stream: TcpStream,
+    pub stream: OwnedWriteHalf,
     pub data_to_send: Vec<u8>,
     pub callback_handler: Option<Box<dyn MessageInterceptor>>,
 }
@@ -243,9 +267,10 @@ impl Sink<CowRpcMessage> for CowMessageSink {
     }
 
     fn start_send(self: Pin<&mut Self>, item: CowRpcMessage) -> Result<(), Self::Error> {
+        let this = self.get_mut();
         let mut msg = item;
 
-        if let Some(ref mut interceptor) = self.callback_handler {
+        if let Some(ref mut interceptor) = this.callback_handler {
             msg = match interceptor.before_send(msg) {
                 Some(msg) => msg,
                 None => return Ok(()),
@@ -253,13 +278,15 @@ impl Sink<CowRpcMessage> for CowMessageSink {
         }
 
         debug!(">> {}", msg.get_msg_info());
-        msg.write_to(&mut self.data_to_send)?;
+        msg.write_to(&mut this.data_to_send)?;
         Ok(())
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if !self.data_to_send.is_empty() {
-            let res = self.stream.write_all(&self.data_to_send);
+        let this = self.get_mut();
+
+        if !this.data_to_send.is_empty() {
+            let res = ready!(this.stream.write_all(&this.data_to_send).poll_unpin(cx));
             if let Err(e) = res {
                 if let ErrorKind::WouldBlock = e.kind() {
                     return Poll::Pending;
@@ -267,7 +294,7 @@ impl Sink<CowRpcMessage> for CowMessageSink {
 
                 return Poll::Ready(Err(e.into()));
             }
-            self.data_to_send.clear();
+            this.data_to_send.clear();
         }
         Poll::Ready(Ok(()))
     }

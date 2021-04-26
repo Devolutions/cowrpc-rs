@@ -25,6 +25,7 @@ use crate::error::Result;
 use tokio::stream::StreamExt;
 use pin_utils::pin_mut;
 use crate::transport::r#async::StreamEx;
+use futures::ready;
 
 type HandleMonitor = Arc<Mutex<Option<PeerHandle>>>;
 type HandleMsgProcessor = Arc<RwLock<Option<CowRpcPeerAsyncMsgProcessor>>>;
@@ -1213,7 +1214,15 @@ impl CowRpcAsyncPeer {
 impl Stream for CowRpcAsyncPeer {
     type Item = Result<CowRpcMessage>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let result = ready!(futures::StreamExt::next(&mut self.reader_stream).poll_unpin(cx));
+        match result {
+            Some(Err(CowRpcError::Transport(transport::TransportError::ConnectionReset))) => {
+                // We want to check if the error is a disconnection
+                return Poll::Ready(None);
+            }
+            other => return Poll::Ready(other),
+        }
         let mut next = futures::StreamExt::next(&mut self.reader_stream);
 
         match Pin::new(&mut next).poll(cx) {
@@ -1257,7 +1266,7 @@ impl Stream for CowRpcAsyncPeer {
 //     }
 // }
 
-pub async fn client_handshake(mut async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
+async fn client_handshake(mut async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
     let mut header = CowRpcHdr {
         msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
         flags: if async_peer.inner.mode == CowRpcMode::DIRECT {
@@ -1305,7 +1314,7 @@ pub async fn client_handshake(mut async_peer: CowRpcAsyncPeer) -> Result<CowRpcA
     Ok(peer)
 }
 
-pub async fn client_register(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
+async fn client_register(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
     let ifacedefs;
     {
         let ifaces = async_peer.inner.ifaces.read().await;
