@@ -1081,7 +1081,6 @@ impl CowRpcRouterPeer {
         let mut transport = transport;
         let remote_addr = transport.remote_addr();
         let (mut reader_stream, writer_sink) = transport.message_stream_sink();
-        //let mut reader_stream = transport.message_stream();
         let (peer, peer_sender) = match reader_stream.next().await {
             Some(msg) => match msg? {
                 CowRpcMessage::Handshake(hdr, msg) => {
@@ -1089,30 +1088,7 @@ impl CowRpcRouterPeer {
                         let mut flag: u16 = CowRpcErrorCode::Success.into();
 
                         if hdr.flags & COW_RPC_FLAG_DIRECT != 0 {
-                            flag = CowRpcErrorCode::Proto.into();
-
-                            let router = router.clone();
-                            let cache_clone = router.inner.cache.get_raw_cache().clone();
-                            let inner = Arc::new(CowRpcRouterPeerSharedInner {
-                                cow_id: 0,
-                                writer_sink: Mutex::new(writer_sink),
-                                binds: RouterBindCollection::new(0, cache_clone),
-                                state: RwLock::new(CowRpcRouterPeerState::Error),
-                            });
-
-                            let mut peer = CowRpcRouterPeer {
-                                inner: inner.clone(),
-                                identity: Arc::new(SyncRwLock::new(None)),
-                                reader_stream: Arc::new(Mutex::new(reader_stream)),
-                                router,
-                            };
-
-                            peer.send_handshake_rsp(flag).await?;
-                            // peer.inner.writer_sink.lock().poll_complete()?;
-
-                            return Err(CowRpcError::Proto(
-                                "Handshake used the direct connection flag, shutting down the connection".to_string(),
-                            ));
+                            unimplemented!("Direct mode is not implemented")
                         } else {
                             trace!("Client connected from {:?}", remote_addr);
 
@@ -1139,7 +1115,6 @@ impl CowRpcRouterPeer {
                             };
 
                             peer.send_handshake_rsp(flag).await?;
-                            // peer.inner.writer_sink.lock().poll_complete()?;
 
                             (peer, peer_sender)
                         }
