@@ -1,6 +1,6 @@
 use crate::error::{CowRpcError, Result};
 use futures::prelude::*;
-use futures_01::{task};
+use futures::task::Waker;
 use parking_lot::Mutex;
 use crate::proto::CowRpcMessage;
 use std::collections::VecDeque;
@@ -12,21 +12,22 @@ use std::pin::Pin;
 #[derive(Clone)]
 pub struct Adaptor {
     messages: Arc<Mutex<VecDeque<CowRpcMessage>>>,
-    current_task: Arc<Mutex<Option<task::Task>>>,
+    waker: Arc<Mutex<Option<Waker>>>
+    //current_task: Arc<Mutex<Option<Task>>>,
 }
 
 impl Adaptor {
     pub fn new() -> Adaptor {
         Adaptor {
             messages: Arc::new(Mutex::new(VecDeque::new())),
-            current_task: Arc::new(Mutex::new(None)),
+            waker: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn message_stream(&self) -> CowStream<CowRpcMessage> {
         Box::new(AdaptorStream {
             messages: self.messages.clone(),
-            current_task: self.current_task.clone(),
+            waker: self.waker.clone(),
         })
     }
 }
@@ -38,10 +39,10 @@ impl MessageInjector for Adaptor {
 
             messages.push_back(msg);
 
-            let current_task = self.current_task.lock();
+            let waker = self.waker.lock();
 
-            if let Some(ref task) = &*current_task {
-                task.notify();
+            if let Some(ref waker) = &*waker {
+                waker.wake_by_ref();
             }
         }
     }
@@ -49,7 +50,7 @@ impl MessageInjector for Adaptor {
 
 struct AdaptorStream {
     messages: Arc<Mutex<VecDeque<CowRpcMessage>>>,
-    current_task: Arc<Mutex<Option<task::Task>>>,
+    waker: Arc<Mutex<Option<Waker>>>,
 }
 
 impl Stream for AdaptorStream {
@@ -59,9 +60,9 @@ impl Stream for AdaptorStream {
         let mut messages = self.messages.lock();
 
         if messages.is_empty() {
-            let mut task = self.current_task.lock();
-            if task.is_none() {
-                *task = Some(task::current());
+            let mut waker = self.waker.lock();
+            if waker.is_none() {
+                *waker = Some(cx.waker().clone());
             }
 
             return Poll::Pending;

@@ -17,11 +17,11 @@ async fn main() {
         .cert_from_pkcs12(include_bytes!("../certs/router.local.pfx"), "")
         .acceptor()
         .unwrap();
-    let (router, _router_handle) = CowRpcRouter::new("wss://router.local:12345", Some(tls_options))
-                                                 .expect("new router failed");
+    //let (router, _router_handle) = CowRpcRouter::new("wss://router.local:12345", Some(tls_options)).await.expect("new router failed");
+    let (router, _router_handle) = CowRpcRouter::new("tcp://localhost:12346", Some(tls_options)).await.expect("new router failed");
 
 
-    if let Err(e) = router.spawn() {
+    if let Err(e) = router.spawn().await {
         error!("Failed to run router: {}", e);
     }
 }

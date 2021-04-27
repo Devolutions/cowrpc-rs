@@ -28,11 +28,8 @@ extern crate tokio;
 use std::io::prelude::*;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::thread::JoinHandle;
-use std::time::Duration;
 use async_trait::async_trait;
 use futures::Future;
-//use futures_01::sync::oneshot::Sender as AsyncSender;
 use futures::channel::oneshot::Sender as AsyncSender;
 //TODO FD REMOVE
 //use mio::{Events, Poll, PollOpt, Ready, Token};

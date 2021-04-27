@@ -2,9 +2,7 @@ use crate::error::CowRpcError;
 use crate::error::CowRpcErrorCode;
 use futures::future::Future;
 use futures::prelude::*;
-use futures::future::{err, ok};
 use futures::channel::oneshot::{channel, Receiver, Sender};
-//use parking_lot::{Mutex};
 use tokio::sync::{RwLock, Mutex};
 use crate::proto::*;
 use crate::proto::{CowRpcIfaceDef, Message};
@@ -704,7 +702,7 @@ impl CowRpcPeerAsyncMsgProcessor {
     }
 
     async fn process_terminate_rsp(&self, _: CowRpcHdr) -> Result<()> {
-        self.inner.transition_to_state(CowRpcState::TERMINATE);
+        self.inner.transition_to_state(CowRpcState::TERMINATE).await;
         Ok(())
     }
 
@@ -1163,7 +1161,7 @@ impl CowRpcAsyncPeer {
     }
 
     pub async fn handshake(self) -> Result<Self> {
-        self.inner.transition_to_state(CowRpcState::HANDSHAKE);
+        self.inner.transition_to_state(CowRpcState::HANDSHAKE).await;
         client_handshake(self).await
     }
 
@@ -1179,13 +1177,13 @@ impl CowRpcAsyncPeer {
             )));
         }
 
-        self.inner.set_id(header.dst_id);
-        self.inner.set_router_id(header.src_id);
+        self.inner.set_id(header.dst_id).await;
+        self.inner.set_router_id(header.src_id).await;
         Ok(())
     }
 
     pub async fn register(self) -> Result<Self> {
-        self.inner.transition_to_state(CowRpcState::REGISTER);
+        self.inner.transition_to_state(CowRpcState::REGISTER).await;
         client_register(self).await
     }
 
@@ -1206,7 +1204,7 @@ impl CowRpcAsyncPeer {
             self.inner.register_iface_def(&mut iface_clone, false).await?;
         }
 
-        self.inner.transition_to_state(CowRpcState::ACTIVE);
+        self.inner.transition_to_state(CowRpcState::ACTIVE).await;
         Ok(())
     }
 }

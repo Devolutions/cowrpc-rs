@@ -43,7 +43,7 @@ impl Listener for TcpListener {
 
     fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
         let TcpListener {
-            mut listener,
+            listener,
             transport_cb_handler,
         } = self;
 

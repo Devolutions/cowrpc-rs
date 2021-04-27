@@ -176,8 +176,6 @@ impl CowRpcRouter {
             keep_alive_interval,
         } = self;
 
-        let router_shared_clone = shared.clone();
-
         let mut listener_builder = ListenerBuilder::from_uri(&listener_url)?;
 
         if let Some(interceptor) = msg_interceptor {
@@ -190,8 +188,27 @@ impl CowRpcRouter {
 
         let mut listener = listener_builder.build().await?;
 
+        let mut router_shared_clone = shared.clone();
+        tokio::spawn(
+        adaptor
+            .message_stream()
+            .for_each(move |msg| {
+                let mut router = router_shared_clone.clone();
+                async move {
+                    if let Ok(msg) = msg {
+                        router.process_msg(msg).await;
+                    }
+                }
+            })
+        );
+
+        if let Some(task_info) = peers_are_alive_task_info {
+            tokio::spawn(peers_are_alive_task(shared.inner.peer_senders.clone(), task_info));
+        }
+
+        let mut router_shared_clone = shared.clone();
         let incoming = listener.incoming().await;
-        let router_peer_stream = incoming.for_each(move |transport| {
+        incoming.for_each(move |transport| {
             let router = router_shared_clone.clone();
             tokio::spawn(async move {
                 match transport {
@@ -210,26 +227,8 @@ impl CowRpcRouter {
                 }
             });
             future::ready(())
-        });
+        }).await;
 
-        tokio::spawn(router_peer_stream);
-
-
-        let mut router_shared_clone = shared.clone();
-        tokio::spawn(
-        adaptor
-            .message_stream()
-            .for_each(move |msg| {
-                if let Ok(msg) = msg {
-                    router_shared_clone.process_msg(msg);
-                }
-                future::ready(())
-            })
-        );
-
-        if let Some(task_info) = peers_are_alive_task_info {
-            tokio::spawn(peers_are_alive_task(shared.inner.peer_senders.clone(), task_info));
-        }
         Ok(monitor)
     }
 }
@@ -379,10 +378,7 @@ impl RouterShared {
                                 };
                                 let mut peers = self.inner.peer_senders.write().await;
                                 if let Some(remote_ref) = peers.get_mut(&remote_id) {
-                                    remote_ref.send_unbind_req(client_id, server_id, iface_id).await;
-                                    // {
-                                    //     let _ = remote_ref.inner.writer_sink.lock().poll_complete();
-                                    // }
+                                    let _ = remote_ref.send_unbind_req(client_id, server_id, iface_id).await;
                                 } else {
                                     if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
                                         // Send Unbind req
@@ -446,16 +442,16 @@ impl RouterShared {
             }
             CowRpcMessage::Unbind(hdr, msg) => {
                 if !hdr.is_response() {
-                    self.process_unbind_req(hdr, msg);
+                    self.process_unbind_req(hdr, msg).await;
                 } else {
-                    self.process_unbind_rsp(hdr, msg);
+                    self.process_unbind_rsp(hdr, msg).await;
                 }
             }
             _ => {}
         }
 
         // Forward message to the right peer
-        self.forward_msg(msg);
+        self.forward_msg(msg).await;
     }
 
     fn process_bind_req(&mut self, _header: CowRpcHdr, _msg: CowRpcBindMsg) {
@@ -476,8 +472,8 @@ impl RouterShared {
                 if let CowRpcErrorCode::AlreadyBound = CowRpcErrorCode::from(iface.flags) {
                     success = true;
                 } else {
-                    self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Failure);
-                    self.remove_bind(local_peer_id, client_id, server_id, iface_id);
+                    self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Failure).await;
+                    self.remove_bind(local_peer_id, client_id, server_id, iface_id).await;
                 }
             } else {
                 success = true;
@@ -494,7 +490,7 @@ impl RouterShared {
         }
     }
 
-    fn process_unbind_req(&mut self, header: CowRpcHdr, msg: CowRpcUnbindMsg) {
+    async fn process_unbind_req(&mut self, header: CowRpcHdr, msg: CowRpcUnbindMsg) {
         for iface in msg.ifaces {
             let client_id;
             let server_id;
@@ -511,12 +507,12 @@ impl RouterShared {
             }
 
             if header.is_failure() || iface.is_failure() {
-                self.remove_bind(local_peer_id, client_id, server_id, iface_id);
+                self.remove_bind(local_peer_id, client_id, server_id, iface_id).await;
             }
         }
     }
 
-    fn process_unbind_rsp(&mut self, header: CowRpcHdr, msg: CowRpcUnbindMsg) {
+    async fn process_unbind_rsp(&mut self, header: CowRpcHdr, msg: CowRpcUnbindMsg) {
         for iface in msg.ifaces {
             let client_id;
             let server_id;
@@ -533,12 +529,12 @@ impl RouterShared {
             }
 
             if iface.is_failure() || header.is_failure() {
-                self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Failure);
+                self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Failure).await;
             } else {
-                self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Unbound);
+                self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Unbound).await;
             }
 
-            self.remove_bind(local_peer_id, client_id, server_id, iface_id);
+            self.remove_bind(local_peer_id, client_id, server_id, iface_id).await;
         }
     }
 
@@ -601,7 +597,7 @@ impl RouterShared {
                 if let Some(sender_ref) = sender_opt {
                     if let Err(e) = sender_ref.send_messages(msg_clone).await {
                         warn!("Send message to peer ID {} failed: {}", dst_id, e);
-                        sender_ref.set_connection_error();
+                        sender_ref.set_connection_error().await;
                     } else {
                         return true;
                     }
@@ -625,7 +621,7 @@ impl RouterShared {
             match msg {
                 CowRpcMessage::Call(header, msg, _) => {
                     // To answer a call, we have to send a result message
-                    self.send_call_result_failure(&header, &msg, CowRpcErrorCode::Unreachable.into());
+                    self.send_call_result_failure(&header, &msg, CowRpcErrorCode::Unreachable.into()).await;
                 }
                 _ => {
                     // To answer other messages, we just swap src-dst and we set the flag as response + failure.
@@ -648,10 +644,11 @@ impl RouterShared {
                                 let flag: u16 = CowRpcErrorCode::Unreachable.into();
                                 msg_clone.add_flag(COW_RPC_FLAG_RESPONSE | flag);
 
-                                sender_ref.send_messages(msg_clone).unwrap_or_else(|e| {
+
+                                if let Err(e) = sender_ref.send_messages(msg_clone).await {
                                     warn!("Send message to peer ID {} failed: {}", src_id, e);
-                                    sender_ref.set_connection_error();
-                                });
+                                    sender_ref.set_connection_error().await;
+                                }
                             }
                         })).await;
                     }
@@ -686,7 +683,7 @@ impl RouterShared {
                         } else {
                             self.find_sender_and_then(dst_id, |sender_opt| Box::pin(async move {
                                 if let Some(sender_ref) = sender_opt {
-                                    sender_ref.send_unbind_req(hdr.dst_id, hdr.src_id, iface.id);
+                                    let _ = sender_ref.send_unbind_req(hdr.dst_id, hdr.src_id, iface.id).await;
                                 }
                             })).await;
                         }
@@ -724,12 +721,10 @@ impl RouterShared {
         } else {
             self.find_sender_and_then(dst_id, |sender_opt| Box::pin(async move {
                 if let Some(sender_ref) = sender_opt {
-                    sender_ref
-                        .send_messages(CowRpcMessage::Result(header, msg, Vec::new()))
-                        .unwrap_or_else(|e| {
-                            warn!("Send message to peer ID {} failed: {}", header.src_id, e);
-                            sender_ref.set_connection_error();
-                        });
+                    if let Err(e) = sender_ref.send_messages(CowRpcMessage::Result(header, msg, Vec::new())).await {
+                        warn!("Send message to peer ID {} failed: {}", header.src_id, e);
+                        sender_ref.set_connection_error().await;
+                    }
                 }
             })).await;
         }
@@ -844,7 +839,7 @@ impl CowRpcRouterPeerSender {
         *self.inner.state.write().await = CowRpcRouterPeerState::Error;
     }
 
-    async fn send_unbind_req(&self, client_id: u32, server_id: u32, iface_id: u16) {
+    async fn send_unbind_req(&self, client_id: u32, server_id: u32, iface_id: u16) -> Result<()> {
         let iface_def = CowRpcIfaceDef {
             id: iface_id,
             flags: COW_RPC_DEF_FLAG_EMPTY,
@@ -870,7 +865,7 @@ impl CowRpcRouterPeerSender {
         header.size = header.get_size() + msg.get_size();
         header.offset = header.get_size() as u8;
 
-        let _ = self.send_messages(CowRpcMessage::Unbind(header, msg));
+        self.send_messages(CowRpcMessage::Unbind(header, msg)).await
     }
 
     async fn send_messages(&self, msg: CowRpcMessage) -> Result<()> {
