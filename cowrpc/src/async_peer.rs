@@ -1150,7 +1150,7 @@ impl CowRpcAsyncPeer {
         }
     }
 
-    pub async fn send_msg(self, msg: CowRpcMessage) -> Result<CowRpcAsyncPeer> {
+    async fn send_msg(self, msg: CowRpcMessage) -> Result<CowRpcAsyncPeer> {
         {
             let mut writer = self.inner.writer_sink.lock().await;
             writer.send(msg).await?;
@@ -1159,7 +1159,7 @@ impl CowRpcAsyncPeer {
         Ok(self)
     }
 
-    pub async fn handshake(self) -> Result<Self> {
+    async fn handshake(self) -> Result<Self> {
         self.inner.transition_to_state(CowRpcState::HANDSHAKE).await;
         client_handshake(self).await
     }
@@ -1180,32 +1180,6 @@ impl CowRpcAsyncPeer {
         self.inner.set_router_id(header.src_id).await;
         Ok(())
     }
-
-    pub async fn register(self) -> Result<Self> {
-        self.inner.transition_to_state(CowRpcState::REGISTER).await;
-        client_register(self).await
-    }
-
-    async fn process_register_rsp(&self, header: CowRpcHdr, msg: CowRpcRegisterMsg) -> Result<()> {
-        if header.is_failure() {
-            return Err(crate::error::CowRpcError::CowRpcFailure(CowRpcErrorCode::from(header.flags)));
-        }
-
-        if self.inner.get_state().await != CowRpcState::REGISTER {
-            return Err(crate::error::CowRpcError::Internal(format!(
-                "Register response received and state machine has wrong state ({:?})",
-                self.inner.get_state().await
-            )));
-        }
-
-        for iface in &msg.ifaces {
-            let mut iface_clone = iface.clone();
-            self.inner.register_iface_def(&mut iface_clone, false).await?;
-        }
-
-        self.inner.transition_to_state(CowRpcState::ACTIVE).await;
-        Ok(())
-    }
 }
 
 impl Stream for CowRpcAsyncPeer {
@@ -1220,48 +1194,8 @@ impl Stream for CowRpcAsyncPeer {
             }
             other => return Poll::Ready(other),
         }
-        let mut next = futures::StreamExt::next(&mut self.reader_stream);
-
-        match Pin::new(&mut next).poll(cx) {
-            Poll::Ready(Some(Err(CowRpcError::Transport(transport::TransportError::ConnectionReset)))) => {
-                // We want to check if the error is a disconnection
-                return Poll::Ready(None);
-            }
-            other => return other,
-        }
     }
 }
-
-// struct CowRpcClientHandshake(Option<CowRpcAsyncPeer>);
-//
-// impl CowRpcClientHandshake {
-//     pub async fn new(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
-//         let mut header = CowRpcHdr {
-//             msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
-//             flags: if async_peer.inner.mode == CowRpcMode::DIRECT {
-//                 proto::COW_RPC_FLAG_DIRECT
-//             } else {
-//                 0
-//             },
-//             src_id: 0,
-//             dst_id: 0,
-//             ..Default::default()
-//         };
-//
-//         let msg = CowRpcHandshakeMsg::default();
-//
-//         header.size = header.get_size() + msg.get_size();
-//         header.offset = header.size as u8;
-//
-//         let peer = async_peer.send_msg(CowRpcMessage::Handshake(header, msg)).await?;
-//         CowRpcClientHandshake(Some(peer)).await
-//         // Box::new(
-//         //     async_peer
-//         //         .send_msg(CowRpcMessage::Handshake(header, msg))
-//         //         .and_then(|peer| CowRpcClientHandshake(Some(peer))),
-//         // )
-//     }
-// }
 
 async fn client_handshake(mut async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
     let mut header = CowRpcHdr {
@@ -1305,55 +1239,6 @@ async fn client_handshake(mut async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsync
                 "Expected Handshake Response, got {:?}",
                 msg
             )));
-        }
-    }
-
-    Ok(peer)
-}
-
-async fn client_register(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
-    let ifacedefs;
-    {
-        let ifaces = async_peer.inner.ifaces.read().await;
-        ifacedefs = build_ifacedef_list(&ifaces, true, true).await;
-        drop(ifaces);
-    }
-    let mut header = CowRpcHdr {
-        msg_type: proto::COW_RPC_REGISTER_MSG_ID,
-        src_id: async_peer.inner.get_id().await,
-        dst_id: async_peer.inner.get_router_id().await,
-        ..Default::default()
-    };
-
-    let msg = CowRpcRegisterMsg { ifaces: ifacedefs };
-
-    header.size = header.get_size() + msg.get_size();
-    header.offset = header.get_size() as u8;
-
-
-    let mut peer = async_peer.send_msg(CowRpcMessage::Register(header, msg)).await?;
-
-    match futures::StreamExt::next(&mut peer.reader_stream).await {
-        Some(msg_result) => {
-            match msg_result? {
-                CowRpcMessage::Register(header, msg) => {
-                    if header.is_response() {
-                        peer.process_register_rsp(header, msg).await?;
-                    } else {
-                        return Err(CowRpcError::Proto(
-                            "Expected Register Response, got Register request".to_string(),
-                        ));
-                    }
-                }
-                msg => {
-                    return Err(CowRpcError::Proto(format!("Expected Register Response, got {:?}", msg)));
-                }
-            }
-        },
-        None => {
-            return Err(CowRpcError::Proto(
-                "Connection was reset before register response".to_string(),
-            ));
         }
     }
 
@@ -1466,8 +1351,7 @@ impl CowRpcPeer {
         let mut peer = match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri)).await {
             Ok(Ok(transport)) => {
                 let mut peer = CowRpcAsyncPeer::new(transport, mode, ifaces, on_unbind_callback, on_http_msg_callback);
-                peer = peer.handshake().await?;
-                peer.register().await?
+                peer.handshake().await?
             }
             Ok(Err(e)) => {
                 return Err(e);
@@ -1520,38 +1404,39 @@ impl CowRpcPeer {
         }
     }
 
-    pub fn register_iface(&mut self, iface_reg: CowRpcIfaceReg, server: Option<Box<dyn AsyncServer>>) -> Result<u16> {
-        let iface_id = self.ifaces.len() as u16;
-
-        let mut iface = CowRpcAsyncIface {
-            name: String::from(iface_reg.name),
-            lid: iface_id,
-            rid: 0,
-            procs: Vec::new(),
-            server,
-        };
-
-        for procedure in iface_reg.procs {
-            iface.procs.push(CowRpcProc {
-                lid: procedure.id,
-                rid: 0,
-                name: String::from(procedure.name),
-            })
-        }
-
-        self.ifaces.push(Arc::new(RwLock::new(iface)));
-        Ok(iface_id)
-    }
-
-    pub async fn set_iface_server(&mut self, iface_id: u16, server: Option<Box<dyn AsyncServer>>) {
-        for iface_mutex in self.ifaces.iter() {
-            let mut iface = iface_mutex.write().await;
-            if iface.lid == iface_id {
-                iface.set_server(server);
-                break;
-            }
-        }
-    }
+    // TODO REMOVE
+    // pub fn register_iface(&mut self, iface_reg: CowRpcIfaceReg, server: Option<Box<dyn AsyncServer>>) -> Result<u16> {
+    //     let iface_id = self.ifaces.len() as u16;
+    //
+    //     let mut iface = CowRpcAsyncIface {
+    //         name: String::from(iface_reg.name),
+    //         lid: iface_id,
+    //         rid: 0,
+    //         procs: Vec::new(),
+    //         server,
+    //     };
+    //
+    //     for procedure in iface_reg.procs {
+    //         iface.procs.push(CowRpcProc {
+    //             lid: procedure.id,
+    //             rid: 0,
+    //             name: String::from(procedure.name),
+    //         })
+    //     }
+    //
+    //     self.ifaces.push(Arc::new(RwLock::new(iface)));
+    //     Ok(iface_id)
+    // }
+    //
+    // pub async fn set_iface_server(&mut self, iface_id: u16, server: Option<Box<dyn AsyncServer>>) {
+    //     for iface_mutex in self.ifaces.iter() {
+    //         let mut iface = iface_mutex.write().await;
+    //         if iface.lid == iface_id {
+    //             iface.set_server(server);
+    //             break;
+    //         }
+    //     }
+    // }
 
     pub fn on_unbind_callback<F: 'static + Send + Sync + Fn(Arc<CowRpcAsyncBindContext>)>(&mut self, callback: F) {
         self.on_unbind_callback = Some(Box::new(callback));

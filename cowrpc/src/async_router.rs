@@ -1228,16 +1228,9 @@ impl CowRpcRouterPeer {
     }
 
     async fn process_register_req(&mut self, _: CowRpcHdr, msg: CowRpcRegisterMsg) -> Result<()> {
-        let mut msg_clone = msg.clone();
-
-        for mut iface in &mut msg_clone.ifaces {
-            if let Err(e) = self.router.register_iface_def(&mut iface).await {
-                error!("Registering iface failed, {:?}", e);
-                iface.flags = CowRpcErrorCode::Internal.into();
-            }
-        }
-
-        self.send_register_rsp(msg_clone.ifaces).await?;
+        // Register is not supported, verify has to be used.
+        let flag = CowRpcErrorCode::NotImplemented;
+        self.send_register_rsp(flag.into(), Vec::new()).await?;
         Ok(())
     }
 
@@ -1382,10 +1375,10 @@ impl CowRpcRouterPeer {
         Ok(())
     }
 
-    async fn send_register_rsp(&mut self, ifaces: Vec<CowRpcIfaceDef>) -> Result<()> {
+    async fn send_register_rsp(&mut self, flag: u16, ifaces: Vec<CowRpcIfaceDef>) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_REGISTER_MSG_ID,
-            flags: COW_RPC_FLAG_RESPONSE,
+            flags: COW_RPC_FLAG_RESPONSE | flag,
             src_id: self.router.inner.id,
             dst_id: self.inner.cow_id,
             ..Default::default()

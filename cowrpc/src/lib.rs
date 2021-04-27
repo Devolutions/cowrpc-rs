@@ -340,7 +340,6 @@ pub enum CowRpcMode {
 enum CowRpcState {
     INITIAL,
     HANDSHAKE,
-    REGISTER,
     ACTIVE,
     TERMINATE,
 }

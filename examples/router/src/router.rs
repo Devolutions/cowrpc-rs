@@ -32,6 +32,7 @@ async fn main() {
 
 fn verify_identity_callback(cow_id: u32, msg: &[u8]) -> BoxFuture<(Vec<u8>, Option<String>)>  {
     let req_string = String::from_utf8_lossy(msg).to_string();
+    info!("verify identity request received: cow_id={:#010X} \r\n {}", cow_id, req_string);
 
     async move {
         (b"HTTP/1.1 200 OK\r\n\r\n".to_vec(), Some("server".to_string()))
