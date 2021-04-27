@@ -1,5 +1,6 @@
 #[allow(dead_code)]
 #[derive(CowRpcIface)]
+#[cowrpc(async)]
 struct IfaceName {
     callname: CallName,
     callname2: CallName2,
@@ -8,6 +9,7 @@ struct IfaceName {
 #[allow(dead_code)]
 #[derive(CowRpcCall)]
 #[cowrpc(iface_name = "IfaceName")]
+#[cowrpc(async)]
 struct CallName {
     #[cowrpc(input)]
     param1: u64,
@@ -36,6 +38,7 @@ struct CallName {
 #[allow(dead_code)]
 #[derive(CowRpcCall)]
 #[cowrpc(iface_name = "IfaceName")]
+#[cowrpc(async)]
 struct CallName2 {
     #[cowrpc(input)]
     param1: u64,

@@ -4,6 +4,6 @@ extern crate rmp;
 extern crate cowrpc_derive;
 
 //TODO disable for now
-//pub mod iface_cow;
-//pub mod test2_cow;
-//pub mod test_cow;
+// pub mod iface_cow;
+// pub mod test2_cow;
+// pub mod test_cow;

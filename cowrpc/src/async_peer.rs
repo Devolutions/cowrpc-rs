@@ -1125,8 +1125,7 @@ struct CowRpcAsyncPeer {
 impl CowRpcAsyncPeer {
     pub fn new(transport: CowRpcTransport, mode: CowRpcMode, ifaces: Vec<Arc<RwLock<CowRpcAsyncIface>>>, on_unbind: Option<Box<UnbindCallback>>, on_http: Option<Box<HttpMsgCallback>>) -> Self {
         let mut transport = transport;
-        let reader_stream = transport.message_stream();
-        let writer_sink = transport.message_sink();
+        let (reader_stream, writer_sink) = transport.message_stream_sink();
 
         CowRpcAsyncPeer {
             inner: CowRpcPeerSharedInner {

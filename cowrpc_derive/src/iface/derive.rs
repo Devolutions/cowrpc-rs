@@ -71,7 +71,7 @@ fn gen_async_usages() -> Result<Tokens, String> {
         use std::io::{Read, Write};
         use std::sync::Arc;
         use rmp;
-        use futures_01::{Future, future::err};
+        use futures::{future::Future, future::err};
         use cowrpc;
         use cowrpc::msgpack::msgpack_decode_binary;
         use cowrpc::{CowRpcAsyncBindContext, CowRpcCallContext, CowRpcIfaceReg, CowRpcParams, CowRpcProcReg};
@@ -204,7 +204,7 @@ fn gen_server_dispatch_impl(server_call_tokens: Vec<Tokens>, r#async: bool) -> R
                 fn dispatch_call(&self, caller_id: u32, proc_id: u16, payload: &mut Vec<u8>) -> CowFuture<Box<CowRpcParams>> {
                     match proc_id {
                     #(#server_call_tokens)*
-                    _ => Box::new(::futures_01::failed(CowRpcError::CowRpcFailure(CowRpcErrorCode::ProcId))),
+                    _ => Box::new(::futures::future::err(CowRpcError::CowRpcFailure(CowRpcErrorCode::ProcId))),
                     }
                 }
             }

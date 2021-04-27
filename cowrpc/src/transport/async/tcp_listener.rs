@@ -1,8 +1,4 @@
 use crate::error::CowRpcError;
-use futures_01::{
-    future::ok,
-    Stream,
-};
 use std::net::SocketAddr;
 use crate::transport::{
     r#async::{Listener, CowFuture, CowStream, tcp::TcpTransport},

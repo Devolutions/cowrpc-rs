@@ -7,6 +7,7 @@ use futures::channel::oneshot::{Receiver, Sender, channel};
 use mouscache;
 use mouscache::Cache;
 use mouscache::CacheFunc;
+use parking_lot::RwLock as SyncRwLock;
 use tokio::sync::{Mutex, RwLock};
 use crate::proto;
 use crate::proto::*;
@@ -249,7 +250,7 @@ async fn process_connection(transport: CowRpcTransport, router: RouterShared) ->
         callback(peer.inner.cow_id);
     }
 
-    let (peer_id, identity) = peer.await.map_err(|(_, _, error)| error)?;
+    let (peer_id, identity) = peer.run().await.map_err(|(_, _, error)| error)?;
     router.clone().clean_up_connection(peer_id, identity).await;
 
     Ok(())
@@ -811,11 +812,9 @@ pub struct CowRpcRouterPeerSharedInner {
 
 pub struct CowRpcRouterPeer {
     inner: Arc<CowRpcRouterPeerSharedInner>,
-    identity: Arc<RwLock<Option<CowRpcIdentity>>>,
+    identity: Arc<SyncRwLock<Option<CowRpcIdentity>>>,
     reader_stream: Arc<Mutex<CowStreamEx<CowRpcMessage>>>,
     router: RouterShared,
-
-    process_msg_fut: Option<BoxFuture<'static, Result<()>>>,
 }
 
 impl Clone for CowRpcRouterPeer {
@@ -825,7 +824,6 @@ impl Clone for CowRpcRouterPeer {
             identity: self.identity.clone(),
             reader_stream: self.reader_stream.clone(),
             router: self.router.clone(),
-            process_msg_fut: None,
         }
     }
 }
@@ -964,76 +962,53 @@ impl CowRpcRouterPeerSender {
     }
 }
 
-impl Future for CowRpcRouterPeer {
-    type Output = std::result::Result<(u32, Option<CowRpcIdentity>), (u32, Option<CowRpcIdentity>, CowRpcError)>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // TODO
-        // loop {
-        //     match self.process_msg_fut.take() {
-        //         Some(mut fut) => {
-        //             match fut.poll() {
-        //                 Poll::Pending => {
-        //                     self.process_msg_fut = Some(fut);
-        //                     return Poll::Pending;
-        //                 }
-        //                 Poll::Ready(Err(e)) => {
-        //                     return Poll::Ready(Err((self.inner.cow_id, self.identity.read().await.clone(), e)));
-        //                 }
-        //                 _ => {}
-        //
-        //             }
-        //         }
-        //         None => {
-        //             let res = {
-        //                 let mut lock = self.reader_stream.lock();
-        //                 lock.poll()
-        //             };
-        //             match *res {
-        //                 Poll::Ready(Ok(Some(msg))) => {
-        //                     let peer = self.clone();
-        //                     self.process_msg_fut = Some(CowRpcRouterPeer::process_msg(peer, msg));
-        //                     self.poll().map_err(|(_, _, e)| (self.inner.cow_id, self.identity.read().await.clone(), e))?;
-        //                 }
-        //                 Poll::Pending => {
-        //                     break; // nothing to do with that
-        //                 }
-        //                 Poll::Ready(Ok(None)) => {
-        //                     return Poll::Ready(Ok((self.inner.cow_id, self.identity.read().await.clone()))); // means the transport is disconnected
-        //                 }
-        //                 Poll::Ready(Err(e)) => {
-        //                     return Poll::Ready(Err((self.inner.cow_id, self.identity.read().await.clone(), e)));
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
-        // {
-        //     self.inner
-        //         .writer_sink
-        //         .lock()
-        //         .poll_complete()
-        //         .map_err(|e| (self.inner.cow_id, self.identity.read().await.clone(), e))?;
-        // }
-        // {
-        //     match &*self.inner.state.read().await {
-        //         CowRpcRouterPeerState::Error => {
-        //             return Poll::Ready(Err((
-        //                 self.inner.cow_id,
-        //                 self.identity.read().await.clone(),
-        //                 CowRpcError::Internal("An error occured while polling the peer connection".to_string()),
-        //             )));
-        //         }
-        //         CowRpcRouterPeerState::Terminated => {
-        //             return Poll::Ready(Ok((self.inner.cow_id, self.identity.read().await.clone())));
-        //         }
-        //         _ => {}
-        //     }
-        // }
-
-        Poll::Pending
-    }
-}
+// impl Future for CowRpcRouterPeer {
+//     type Output = std::result::Result<(u32, Option<CowRpcIdentity>), (u32, Option<CowRpcIdentity>, CowRpcError)>;
+//
+//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+//         loop {
+//
+//             let res = {
+//                 let mut lock = self.reader_stream.lock();
+//                 lock.poll_unpin(cx)
+//             };
+//             match *res {
+//                 Poll::Ready(Ok(Some(msg))) => {
+//                     let peer = self.clone();
+//                     self.process_msg_fut = Some(CowRpcRouterPeer::process_msg(peer, msg));
+//                     self.poll().map_err(|(_, _, e)| (self.inner.cow_id, self.identity.read().clone(), e))?;
+//                 }
+//                 Poll::Pending => {
+//                     break; // nothing to do with that
+//                 }
+//                 Poll::Ready(Ok(None)) => {
+//                     return Poll::Ready(Ok((self.inner.cow_id, self.identity.read().clone()))); // means the transport is disconnected
+//                 }
+//                 Poll::Ready(Err(e)) => {
+//                     return Poll::Ready(Err((self.inner.cow_id, self.identity.read().clone(), e)));
+//                 }
+//             }
+//         }
+//
+//         {
+//             match &*self.inner.state.read() {
+//                 CowRpcRouterPeerState::Error => {
+//                     return Poll::Ready(Err((
+//                         self.inner.cow_id,
+//                         self.identity.read().clone(),
+//                         CowRpcError::Internal("An error occured while polling the peer connection".to_string()),
+//                     )));
+//                 }
+//                 CowRpcRouterPeerState::Terminated => {
+//                     return Poll::Ready(Ok((self.inner.cow_id, self.identity.read().clone())));
+//                 }
+//                 _ => {}
+//             }
+//         }
+//
+//         Poll::Pending
+//     }
+// }
 
 fn generate_peer_id(router: &RouterShared) -> u32 {
     loop {
@@ -1063,12 +1038,50 @@ fn generate_peer_id(router: &RouterShared) -> u32 {
 }
 
 impl CowRpcRouterPeer {
+    async fn run(self) -> std::result::Result<(u32, Option<CowRpcIdentity>), (u32, Option<CowRpcIdentity>, CowRpcError)> {
+        loop {
+            let mut stream = self.reader_stream.lock().await;
+            match stream.next().await {
+                Some(Ok(msg)) => {
+                    if let Err(e) = self.clone().process_msg(msg).await {
+                        debug!("Msg failed to be processed: {}", e);
+                    }
+                }
+                Some(Err(e)) => {
+                    return Err((
+                        self.inner.cow_id,
+                        self.identity.read().clone(),
+                        e));
+                }
+                None => {
+                    return Ok((self.inner.cow_id, self.identity.read().clone()));
+                }
+            }
+
+            match &*self.inner.state.read().await {
+                CowRpcRouterPeerState::Error => {
+                    return Err((
+                        self.inner.cow_id,
+                        self.identity.read().clone(),
+                        CowRpcError::Internal("An error occured while polling the peer connection".to_string()),
+                    ));
+                }
+                CowRpcRouterPeerState::Terminated => {
+                    return Ok((self.inner.cow_id, self.identity.read().clone()));
+                }
+                _ => {}
+            }
+        }
+    }
+
     async fn handshake(
         transport: CowRpcTransport,
         router: RouterShared
     ) -> Result<(CowRpcRouterPeer, CowRpcRouterPeerSender)> {
         let mut transport = transport;
-        let mut reader_stream = transport.message_stream();
+        let remote_addr = transport.remote_addr();
+        let (mut reader_stream, writer_sink) = transport.message_stream_sink();
+        //let mut reader_stream = transport.message_stream();
         let (peer, peer_sender) = match reader_stream.next().await {
             Some(msg) => match msg? {
                 CowRpcMessage::Handshake(hdr, msg) => {
@@ -1080,8 +1093,6 @@ impl CowRpcRouterPeer {
 
                             let router = router.clone();
                             let cache_clone = router.inner.cache.get_raw_cache().clone();
-                            let reader_stream = transport.message_stream();
-                            let writer_sink = transport.message_sink();
                             let inner = Arc::new(CowRpcRouterPeerSharedInner {
                                 cow_id: 0,
                                 writer_sink: Mutex::new(writer_sink),
@@ -1091,10 +1102,9 @@ impl CowRpcRouterPeer {
 
                             let mut peer = CowRpcRouterPeer {
                                 inner: inner.clone(),
-                                identity: Arc::new(RwLock::new(None)),
+                                identity: Arc::new(SyncRwLock::new(None)),
                                 reader_stream: Arc::new(Mutex::new(reader_stream)),
                                 router,
-                                process_msg_fut: None,
                             };
 
                             peer.send_handshake_rsp(flag).await?;
@@ -1104,14 +1114,11 @@ impl CowRpcRouterPeer {
                                 "Handshake used the direct connection flag, shutting down the connection".to_string(),
                             ));
                         } else {
-                            trace!("Client connected from {:?}", transport.remote_addr());
+                            trace!("Client connected from {:?}", remote_addr);
 
                             let (mut peer, peer_sender) = {
                                 let router = router.clone();
                                 let cache_clone = router.inner.cache.get_raw_cache().clone();
-                                let transport = &mut transport;
-                                let reader_stream = transport.message_stream();
-                                let writer_sink = transport.message_sink();
                                 let peer_id = generate_peer_id(&router);
                                 let inner = Arc::new(CowRpcRouterPeerSharedInner {
                                     cow_id: peer_id,
@@ -1123,10 +1130,9 @@ impl CowRpcRouterPeer {
                                 (
                                     CowRpcRouterPeer {
                                         inner: inner.clone(),
-                                        identity: Arc::new(RwLock::new(None)),
+                                        identity: Arc::new(SyncRwLock::new(None)),
                                         reader_stream: Arc::new(Mutex::new(reader_stream)),
                                         router,
-                                        process_msg_fut: None,
                                     },
                                     CowRpcRouterPeerSender { inner },
                                 )
@@ -1269,7 +1275,7 @@ impl CowRpcRouterPeer {
                 let cow_id = self.inner.cow_id;
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
-                        *self.identity.write().await = Some(identity);
+                        *self.identity.write() = Some(identity);
                     }
                     Err(e) => {
                         warn!(
