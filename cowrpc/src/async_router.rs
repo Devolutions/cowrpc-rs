@@ -128,7 +128,7 @@ impl CowRpcRouter {
         *cb = Some(Box::new(callback));
     }
 
-    pub async fn verify_identity_callback<F: 'static + Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>, Option<String>)> + Send + Sync>(&mut self, callback: F) {
+    pub async fn verify_identity_callback<F: 'static + Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>, Option<String>)> + Send + Sync> (&mut self, callback: F) {
         let mut cb = self.shared.inner.verify_identity_cb.write().await;
         *cb = Some(Box::new(callback));
     }

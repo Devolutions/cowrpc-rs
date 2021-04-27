@@ -5,7 +5,7 @@ extern crate log;
 extern crate tls_api;
 
 use std::time::Duration;
-use log::error;
+use log::{info, debug, error};
 use cowrpc::*;
 use cowrpc::async_peer::CowRpcPeer;
 // use cowrpc::transport::tls::TlsOptionsBuilder;
@@ -108,7 +108,14 @@ async fn main() {
     if let Err(e) = peer.spawn().await {
         error!("Failed to run server: {}", e);
     }
-    //peer_handle.identify_async("server", CowRpcIdentityType::UPN, Duration::from_secs(10)).await.expect("identify failed");
+
+    let mut verify_req = format!("GET {} HTTP/1.1 \r\n", "/");
+    verify_req.push_str(&format!("Den_ID: {} \r\n", "server"));
+    verify_req.push_str(&format!("Den-Pop-Token: {}", "pop_token"));
+    verify_req.push_str("\r\n");
+
+    let result = peer_handle.verify_async(verify_req.into_bytes(), Duration::from_secs(10)).await.expect("verify failed");
+    info!("Verify returned: {}", std::str::from_utf8(&result).unwrap());
     // let task_handle = tokio::spawn(async move {
     //     peer.spawn().await
     // });
