@@ -25,8 +25,8 @@ async fn main() {
 
     router.verify_identity_callback(verify_identity_callback).await;
 
-    if let Err(e) = router.spawn().await {
-        error!("Failed to run router: {}", e);
+    if let Err(e) = router.run().await {
+        error!("Router stopped with error: {}", e);
     }
 }
 

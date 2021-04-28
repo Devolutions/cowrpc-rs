@@ -1323,11 +1323,11 @@ impl CowRpcPeer {
         )
     }
 
-    pub async fn spawn_server(self) -> Result<()> {
+    pub async fn run_server(self) -> Result<()> {
         unimplemented!()
     }
 
-    pub async fn spawn_client(self) -> Result<()> {
+    pub async fn run_client(self) -> Result<()> {
         use std::str::FromStr;
 
         let CowRpcPeer {
@@ -1367,42 +1367,37 @@ impl CowRpcPeer {
 
         *peer_handle_inner.write().await = Some(msg_processor.clone());
 
-        tokio::spawn(async move {
-                loop {
-                    match futures::StreamExt::next(&mut peer).await {
-                        Some(Ok(msg)) => {
-                            let msg_processor_clone = msg_processor.clone();
-                            tokio::spawn(async move {
-                                match msg_processor_clone.process_message(msg).await {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        error!("Msg processor got an error : {:?}", e);
-                                    }
-                                }
-                                future::ready(())
-                            });
+        loop {
+            match futures::StreamExt::next(&mut peer).await {
+                Some(Ok(msg)) => {
+                    let msg_processor_clone = msg_processor.clone();
+                    tokio::spawn(async move {
+                        match msg_processor_clone.process_message(msg).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                error!("Msg processor got an error : {:?}", e);
+                            }
                         }
-                        Some(Err(e)) => {
-                            error!("Peer msg stream failed with error : {:?}", e);
-                            return future::ready(());
-                        }
-                        None => {
-                            // clean disconnection
-                            return future::ready(())
-                        }
-                    }
+                        future::ready(())
+                    });
+                }
+                Some(Err(e)) => {
+                    error!("Peer msg stream failed with error : {:?}", e);
+                    return Err(e);
+                }
+                None => {
+                    // clean disconnection
+                    return Ok(());
                 }
             }
-        );
+        }
+   }
 
-        Ok(())
-    }
-
-    pub async fn spawn(self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         if self.is_server {
-            self.spawn_server().await
+            self.run_server().await
         } else {
-            self.spawn_client().await
+            self.run_client().await
         }
     }
 

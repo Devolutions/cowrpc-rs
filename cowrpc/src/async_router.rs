@@ -165,7 +165,7 @@ impl CowRpcRouter {
         self.shared.inner.id
     }
 
-    pub async fn spawn(self) -> Result<RouterMonitor> {
+    pub async fn run(self) -> Result<RouterMonitor> {
         let CowRpcRouter {
             listener_url,
             listener_tls_options,

@@ -25,7 +25,7 @@ pub type CowStream<T> = Box<dyn Stream<Item = Result<T>> + Unpin + Send>;
 pub type CowSink<T> = Box<dyn Sink<T, Error = CowRpcError> + Unpin + Send>;
 
 pub type CowStreamEx<T> = Box<dyn StreamEx<Item = Result<T>>>;
-pub trait StreamEx: Stream + Unpin + Send {
+pub trait StreamEx: Stream + Unpin + Sync + Send {
     fn close_on_keep_alive_timeout(&mut self, close: bool);
 }
 

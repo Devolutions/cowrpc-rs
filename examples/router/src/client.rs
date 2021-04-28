@@ -1,8 +1,11 @@
-extern crate cow_ifaces;
 extern crate cowrpc;
 extern crate env_logger;
 extern crate log;
 extern crate tls_api;
+
+use cowrpc::async_peer::CowRpcPeer;
+use std::time::Duration;
+use log::{info, error};
 
 // use tls_api::Certificate;
 //
@@ -17,8 +20,23 @@ extern crate tls_api;
 // use std::sync::Arc;
 // use std::time::Duration;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
+
+    let (peer, peer_handle) = CowRpcPeer::new_client("tcp://127.0.0.1:12346", None, cowrpc::CowRpcMode::ROUTED);
+
+    let task_handle = tokio::spawn(peer.run());
+
+    // TODO : REMOVE THAT
+    std::thread::sleep(Duration::from_secs(2));
+
+    let server_id = peer_handle.resolve_async("server", Duration::from_secs(10)).await.expect("resolve failed");
+    info!("server cow_id = {:#010X}", server_id);
+
+    if let Ok(Err(e)) = task_handle.await {
+        error!("Client stopped with error: {}", e);
+    }
 
     // let (cancel_handle, _cancel_event) = CancelEvent::new();
     // let rpc = Arc::new(CowRpc::new(cowrpc::CowRpcRole::PEER, cowrpc::CowRpcMode::ROUTED));
