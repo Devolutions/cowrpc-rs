@@ -40,19 +40,11 @@ pub use crate::transport::{CowRpcMessageInterceptor, MessageInjector as CowRpcMe
 use tokio::sync::RwLock;
 
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
-//use crate::peer::*;
-// use crate::proto::*;
-//use crate::transport::sync::{CowRpcListener, CowRpcTransport};
-//use crate::cancel_event::CancelEventHandle;
 
 pub mod async_peer;
 pub mod async_router;
-//pub mod cancel_event;
 pub mod error;
-pub mod msgpack;
-//pub mod peer;
 mod proto;
-//pub mod router;
 pub mod transport;
 
 // const NEW_CONNECTION: Token = Token(1);
