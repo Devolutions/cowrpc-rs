@@ -1,6 +1,5 @@
 use crate::error::CowRpcError;
 use crate::error::CowRpcErrorCode;
-use futures::future::Future;
 use futures::prelude::*;
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use tokio::sync::{RwLock, Mutex};
@@ -1178,6 +1177,9 @@ impl CowRpcAsyncPeer {
 
         self.inner.set_id(header.dst_id).await;
         self.inner.set_router_id(header.src_id).await;
+
+        self.inner.transition_to_state(CowRpcState::ACTIVE);
+
         Ok(())
     }
 }

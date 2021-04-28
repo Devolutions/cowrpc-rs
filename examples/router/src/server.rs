@@ -1,12 +1,10 @@
-extern crate cow_ifaces;
 extern crate cowrpc;
 extern crate env_logger;
 extern crate log;
 extern crate tls_api;
 
 use std::time::Duration;
-use log::{info, debug, error};
-use cowrpc::*;
+use log::{info, error};
 use cowrpc::async_peer::CowRpcPeer;
 // use cowrpc::transport::tls::TlsOptionsBuilder;
 

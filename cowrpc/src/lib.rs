@@ -26,7 +26,6 @@ extern crate tokio;
 //extern crate tungstenite;
 
 use std::io::prelude::*;
-use std::ops::Deref;
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures::Future;
@@ -35,7 +34,6 @@ use futures::channel::oneshot::Sender as AsyncSender;
 //use mio::{Events, Poll, PollOpt, Ready, Token};
 //use mio_extras::channel::Sender;
 use futures::channel::oneshot::Sender;
-use parking_lot::{Mutex};
 use tokio::sync::RwLock;
 pub use crate::transport::r#async::CowFuture;
 pub use crate::transport::tls::{TlsOptions, TlsOptionsBuilder};
@@ -46,7 +44,7 @@ pub use crate::transport::MessageInjector as CowRpcMessageInjector;
 
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 //use crate::peer::*;
-use crate::proto::*;
+// use crate::proto::*;
 //use crate::transport::sync::{CowRpcListener, CowRpcTransport};
 //use crate::cancel_event::CancelEventHandle;
 

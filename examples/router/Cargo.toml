@@ -16,9 +16,6 @@ futures = { version = "0.3" }
 [dependencies.cowrpc]
 path = "../../cowrpc"
 
-[dependencies.cow-ifaces]
-path = "../cow-ifaces"
-
 [[example]]
 name = "client_routed"
 path = "src/client.rs"
