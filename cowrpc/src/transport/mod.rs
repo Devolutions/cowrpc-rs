@@ -113,22 +113,7 @@ impl fmt::Display for TransportError {
     }
 }
 
-impl std::error::Error for TransportError {
-    fn description(&self) -> &str {
-        match *self {
-            TransportError::InvalidUri(ref e) => e.description(),
-            TransportError::InvalidUrl(ref _desc) => "Invalid Url",
-            TransportError::InvalidProtocol(ref _desc) => "Invalid protocol",
-            TransportError::PortAlreadyInUse(ref _desc) => "Port already in use",
-            TransportError::EndpointUnreachable(ref _desc) => "Endpoint unreachable",
-            TransportError::UnableToConnect => "Unable to connect",
-            TransportError::ConnectionReset => "Connection reset",
-            TransportError::Other => "Unknown",
-            TransportError::TlsError(ref _desc) => "Unknown",
-            TransportError::WsError(ref _desc) => "Unknown",
-        }
-    }
-}
+impl std::error::Error for TransportError {}
 
 impl From<::tls_api::Error> for TransportError {
     fn from(e: ::tls_api::Error) -> Self {

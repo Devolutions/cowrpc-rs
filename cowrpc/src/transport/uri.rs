@@ -5,7 +5,6 @@
 
 use bytes::{BufMut, Bytes, BytesMut};
 use dns_lookup::lookup_host;
-use std::error::Error as StdError;
 use std::fmt::{self, Display};
 use std::net;
 use std::ops::Deref;
@@ -493,16 +492,10 @@ enum ErrorKind {
 
 impl fmt::Display for UriError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.pad(self.description())
-    }
-}
-
-impl StdError for UriError {
-    fn description(&self) -> &str {
         match self.0 {
-            ErrorKind::Empty => "empty Uri string",
-            ErrorKind::Malformed => "invalid character in Uri authority",
-            ErrorKind::MissingAuthority => "absolute Uri missing authority segment",
+            ErrorKind::Empty => write!(f, "empty Uri string"),
+            ErrorKind::Malformed => write!(f, "invalid character in Uri authority"),
+            ErrorKind::MissingAuthority => write!(f, "absolute Uri missing authority segment"),
         }
     }
 }

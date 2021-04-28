@@ -79,27 +79,6 @@ enum CowRpcState {
     TERMINATE,
 }
 
-pub struct CowRpcAsyncIdentifyReq {
-    id: usize,
-    name: String,
-    tx: Option<AsyncSender<CowRpcAsyncIdentifyRsp>>,
-}
-
-#[derive(Debug)]
-struct CowRpcAsyncIdentifyRsp {
-    error: CowRpcErrorCode,
-}
-
-impl CowRpcAsyncIdentifyRsp {
-    fn get_result(&self) -> Result<()> {
-        if self.error == CowRpcErrorCode::Success {
-            return Ok(());
-        } else {
-            return Err(CowRpcError::CowRpcFailure(self.error.clone()));
-        }
-    }
-}
-
 pub struct CowRpcAsyncResolveReq {
     id: usize,
     node_id: Option<u32>,
@@ -130,75 +109,6 @@ impl CowRpcAsyncResolveRsp {
         } else {
             return Err(CowRpcError::CowRpcFailure(self.error.clone()));
         }
-    }
-}
-
-pub struct CowRpcAsyncBindReq {
-    id: usize,
-    server_id: u32,
-    iface_id: u16,
-    tx: Option<AsyncSender<CowRpcAsyncBindRsp>>,
-}
-
-#[derive(Debug)]
-struct CowRpcAsyncBindRsp {
-    error: CowRpcErrorCode,
-}
-
-impl CowRpcAsyncBindRsp {
-    fn is_success(&self) -> bool {
-        return self.error == CowRpcErrorCode::Success;
-    }
-
-    fn get_error(&self) -> CowRpcErrorCode {
-        return self.error.clone();
-    }
-}
-//
-// pub struct CowRpcAsyncUnbindReq {
-//     id: usize,
-//     from_client: bool,
-//     remote_id: u32,
-//     iface_id: u16,
-//     tx: Option<AsyncSender<CowRpcAsyncUnbindRsp>>,
-// }
-
-#[derive(Debug)]
-struct CowRpcAsyncUnbindRsp {
-    error: CowRpcErrorCode,
-}
-
-impl CowRpcAsyncUnbindRsp {
-    fn is_success(&self) -> bool {
-        return self.error == CowRpcErrorCode::Success;
-    }
-
-    fn get_error(&self) -> CowRpcErrorCode {
-        return self.error.clone();
-    }
-}
-
-pub struct CowRpcAsyncCallReq {
-    id: usize,
-    call_id: u32,
-    iface_id: u16,
-    proc_id: u16,
-    tx: Option<AsyncSender<CowRpcAsyncCallRsp>>,
-}
-
-#[derive(Debug)]
-pub struct CowRpcAsyncCallRsp {
-    error: CowRpcErrorCode,
-    pub msg_pack: Vec<u8>,
-}
-
-impl CowRpcAsyncCallRsp {
-    fn is_success(&self) -> bool {
-        return self.error == CowRpcErrorCode::Success;
-    }
-
-    fn get_error(&self) -> CowRpcErrorCode {
-        return self.error.clone();
     }
 }
 

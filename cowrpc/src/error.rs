@@ -32,20 +32,7 @@ impl fmt::Display for CowRpcError {
     }
 }
 
-impl std::error::Error for CowRpcError {
-    fn description(&self) -> &str {
-        match self {
-            CowRpcError::Io(ref error) => error.description(),
-            CowRpcError::TimeoutMpsc(ref error) => error.description(),
-            CowRpcError::Internal(_) => "Internal error",
-            CowRpcError::Proto(_) => "Protocol error",
-            CowRpcError::CowRpcFailure(_) => "Flag failure",
-            CowRpcError::Cancel => "Operation cancelled",
-            CowRpcError::Timeout => "Operation timed out",
-            CowRpcError::Transport(ref error) => error.description(),
-        }
-    }
-}
+impl std::error::Error for CowRpcError {}
 
 impl From<transport::CowRpcTransportError> for CowRpcError {
     fn from(error: transport::CowRpcTransportError) -> CowRpcError {
