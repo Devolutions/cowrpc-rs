@@ -2,13 +2,7 @@ use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
 use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, Transport};
 use crate::transport::Uri;
-use crate::{
-    proto, transport, CallFuture, CowRpcAsyncBindContext, CowRpcAsyncBindReq, CowRpcAsyncBindRsp,
-    CowRpcAsyncCallReq, CowRpcAsyncCallRsp, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncIdentifyReq,
-    CowRpcAsyncIdentifyRsp, CowRpcAsyncIface, CowRpcAsyncReq, CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp,
-    CowRpcAsyncUnbindReq, CowRpcAsyncUnbindRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext,
-    CowRpcIdentityType, CowRpcIfaceReg, CowRpcMode, CowRpcParams, CowRpcProc, CowRpcState, Iface,
-};
+use crate::{proto, transport, CallFuture, CowRpcAsyncBindContext, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcIdentityType, CowRpcParams, CowRpcState, CowRpcAsyncReq, CowRpcCallContext};
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::prelude::*;
 use futures::ready;
@@ -42,9 +36,6 @@ static COWRPC_REQ_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
 struct CowRpcPeerSharedInner {
     id: Arc<RwLock<u32>>,
     router_id: Arc<RwLock<u32>>,
-    mode: CowRpcMode,
-    ifaces: Arc<RwLock<Vec<Arc<RwLock<CowRpcAsyncIface>>>>>,
-    bind_contexts: Arc<RwLock<Vec<Arc<CowRpcAsyncBindContext>>>>,
     state: Arc<RwLock<CowRpcState>>,
     requests: Arc<Mutex<Vec<CowRpcAsyncReq>>>,
     writer_sink: Arc<Mutex<CowSink<CowRpcMessage>>>,
@@ -523,8 +514,6 @@ struct CowRpcAsyncPeer {
 impl CowRpcAsyncPeer {
     pub fn new(
         transport: CowRpcTransport,
-        mode: CowRpcMode,
-        ifaces: Vec<Arc<RwLock<CowRpcAsyncIface>>>,
         on_http: Option<Box<HttpMsgCallback>>,
     ) -> Self {
         let transport = transport;
@@ -534,9 +523,6 @@ impl CowRpcAsyncPeer {
             inner: CowRpcPeerSharedInner {
                 id: Arc::new(RwLock::new(0)),
                 router_id: Arc::new(RwLock::new(0)),
-                mode,
-                ifaces: Arc::new(RwLock::new(ifaces)),
-                bind_contexts: Arc::new(RwLock::new(Vec::new())),
                 state: Arc::new(RwLock::new(CowRpcState::INITIAL)),
                 requests: Arc::new(Mutex::new(Vec::new())),
                 writer_sink: Arc::new(Mutex::new(writer_sink)),
@@ -607,11 +593,7 @@ impl Stream for CowRpcAsyncPeer {
 async fn client_handshake(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
     let mut header = CowRpcHdr {
         msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
-        flags: if async_peer.inner.mode == CowRpcMode::DIRECT {
-            proto::COW_RPC_FLAG_DIRECT
-        } else {
-            0
-        },
+        flags: 0,
         src_id: 0,
         dst_id: 0,
         ..Default::default()
@@ -657,8 +639,6 @@ async fn client_handshake(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer
 pub struct CowRpcPeer {
     url: String,
     connection_timeout: Option<Duration>,
-    mode: CowRpcMode,
-    ifaces: Vec<Arc<RwLock<CowRpcAsyncIface>>>,
     #[allow(dead_code)]
     monitor: PeerMonitor,
     peer_handle_inner: HandleMsgProcessor,
@@ -668,7 +648,7 @@ pub struct CowRpcPeer {
 }
 
 impl CowRpcPeer {
-    pub fn new(url: &str, connection_timeout: Option<Duration>, mode: CowRpcMode) -> (CowRpcPeer, CowRpcPeerHandle) {
+    pub fn new(url: &str, connection_timeout: Option<Duration>) -> (CowRpcPeer, CowRpcPeerHandle) {
         let (handle, monitor) = channel();
         let peer_handle_inner = Arc::new(RwLock::new(None));
         let thread_handle = Arc::new(Mutex::new(None));
@@ -679,8 +659,6 @@ impl CowRpcPeer {
             CowRpcPeer {
                 url: url.to_string(),
                 connection_timeout,
-                mode,
-                ifaces: Vec::new(),
                 monitor,
                 peer_handle_inner: peer_handle_inner.clone(),
                 thread_handle: thread_handle.clone(),
@@ -700,8 +678,6 @@ impl CowRpcPeer {
         let CowRpcPeer {
             url,
             connection_timeout,
-            mode,
-            ifaces,
             monitor: _,
             peer_handle_inner,
             thread_handle: _,
@@ -717,7 +693,7 @@ impl CowRpcPeer {
 
         let mut peer = match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri)).await {
             Ok(Ok(transport)) => {
-                let peer = CowRpcAsyncPeer::new(transport, mode, ifaces, on_http_msg_callback);
+                let peer = CowRpcAsyncPeer::new(transport, on_http_msg_callback);
                 peer.handshake().await?
             }
             Ok(Err(e)) => {

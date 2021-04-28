@@ -2,12 +2,12 @@ use super::{CowRpcIdentityType, CowRpcMessage};
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::*;
 use crate::transport::r#async::adaptor::Adaptor;
-use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, ListenerBuilder, StreamEx, Transport};
+use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, ListenerBuilder, Transport};
 use crate::transport::tls::TlsOptions;
 use crate::transport::MessageInterceptor;
 use crate::{proto, CowRpcMessageInterceptor};
 use futures::channel::oneshot::{channel, Receiver, Sender};
-use futures::future::{BoxFuture, FutureExt, TryFutureExt};
+use futures::future::{BoxFuture};
 use futures::prelude::*;
 use futures::stream::StreamExt;
 
@@ -281,7 +281,6 @@ async fn peers_are_alive_task(
 struct Inner {
     id: u32,
     cache: RouterCache,
-    ifaces: RouterIfaceCollection,
     peer_senders: Arc<RwLock<HashMap<u32, CowRpcRouterPeerSender>>>,
     multi_router_peer: RwLock<Option<CowRpcRouterPeerSender>>,
     verify_identity_cb: RwLock<Option<Box<IdentityVerificationCallback>>>,
@@ -296,7 +295,6 @@ impl Inner {
             id,
             cache: RouterCache::new(cache.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
-            ifaces: RouterIfaceCollection::new(cache).await,
             verify_identity_cb: RwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
             multi_router_peer: RwLock::new(None),
@@ -309,7 +307,6 @@ impl Inner {
             id,
             cache: RouterCache::new(cache.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
-            ifaces: RouterIfaceCollection::new(cache).await,
             verify_identity_cb: RwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
             multi_router_peer: RwLock::new(None),
@@ -357,10 +354,6 @@ impl RouterShared {
         // });
 
         res
-    }
-
-    async fn register_iface_def(&self, iface_def: &mut CowRpcIfaceDef) -> Result<()> {
-        self.inner.ifaces.add(iface_def).await
     }
 
     async fn clean_up_connection(self, peer_id: u32, peer_identity: Option<CowRpcIdentity>) {
@@ -1725,238 +1718,6 @@ impl CowRpcBindState {
 struct RouterProc {
     id: u16,
     name: String,
-}
-
-#[derive(Clone)]
-struct RouterIface {
-    id: u16,
-    name: String,
-    procs: Arc<RwLock<HashMap<String, RouterProc>>>,
-}
-
-// TODO
-// impl std::fmt::Display for RouterIface {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
-//         writeln!(f, "Iface \"{}\" id: {}", self.name, self.id)?;
-//         writeln!(f, "|")?;
-//         for procedure in self.procs.read().iter() {
-//             writeln!(f, "    Proc \"{}\" id: {}", procedure.1.name, procedure.1.id)?;
-//         }
-//         writeln!(f, "|")?;
-//         Ok(())
-//     }
-// }
-
-impl RouterIface {
-    pub async fn contains_proc(&self, name: &str) -> bool {
-        self.procs.read().await.contains_key(name)
-    }
-}
-
-struct RouterIfaceCollection {
-    cache: Cache,
-    iface_list: RwLock<HashMap<String, RouterIface>>,
-}
-
-impl RouterIfaceCollection {
-    const COW_IFACE_HASH_SET: &'static str = "cow_iface";
-    const COW_IFACE_PROC_FIELD: &'static str = "cow_proc";
-    const COW_IFACES_SET: &'static str = "cow_ifaces";
-    const COW_PROCS_SET: &'static str = "cow_procs";
-
-    async fn new(cache: Cache) -> Self {
-        let coll = RouterIfaceCollection {
-            cache,
-            iface_list: RwLock::new(HashMap::new()),
-        };
-
-        if let Err(e) = coll.load_from_cache().await {
-            error!("Unable to load CowRpcIfaces from cache: {}", e);
-        }
-
-        coll
-    }
-
-    async fn load_from_cache(&self) -> Result<()> {
-        let mut list_mut = self.iface_list.write().await;
-
-        let members = self.cache.set_members(Self::COW_IFACES_SET)?;
-
-        for member in members {
-            let id = self
-                .cache
-                .hash_get(&Self::iface_hash_set_key(&member), "id")?
-                .unwrap_or(0);
-            let name = member.clone();
-            let mut procs = HashMap::new();
-            let procs_name = self.cache.set_members(&Self::proc_set_key(&member))?;
-
-            for pname in procs_name {
-                let proc_id: u16 = self
-                    .cache
-                    .hash_get(&Self::iface_hash_set_key(&name), &Self::iface_proc_field_key(&pname))?
-                    .unwrap_or(0);
-                procs.insert(
-                    pname.clone(),
-                    RouterProc {
-                        id: proc_id,
-                        name: pname.clone(),
-                    },
-                );
-            }
-
-            let procs = Arc::new(RwLock::new(procs));
-
-            let iface = RouterIface { id, name, procs };
-
-            // TODO: impl Display to iface
-            //info!("Loaded interface from cache : \n {}", iface);
-
-            list_mut.insert(member.clone(), iface);
-        }
-
-        Ok(())
-    }
-
-    pub async fn add(&self, iface_def: &mut CowRpcIfaceDef) -> Result<()> {
-        let mut new_iface = false;
-        self.add_to_cache(iface_def)?;
-
-        let CowRpcIfaceDef {
-            ref id,
-            flags: _iflags,
-            name: ref iface_name,
-            ref procs,
-        } = iface_def;
-
-        let mut list_mut = self.iface_list.write().await;
-
-        if !list_mut.contains_key(iface_name) {
-            new_iface = true;
-            list_mut.insert(
-                iface_name.clone(),
-                RouterIface {
-                    id: *id,
-                    name: iface_name.clone(),
-                    procs: Arc::new(RwLock::new(HashMap::new())),
-                },
-            );
-        }
-
-        let router_iface = list_mut.get_mut(iface_name)
-            .expect("This should never happend since there is a check to add the iface to the hashmap if it does not already exists");
-
-        for p in procs {
-            let CowRpcProcDef {
-                id: ref proc_id,
-                flags: _pflags,
-                name: ref proc_name,
-            } = p;
-
-            if router_iface.contains_proc(proc_name).await {
-                continue;
-            } else {
-                let mut proc_list = router_iface.procs.write().await;
-                proc_list.insert(
-                    proc_name.clone(),
-                    RouterProc {
-                        id: *proc_id,
-                        name: proc_name.clone(),
-                    },
-                );
-            }
-        }
-
-        if new_iface {
-            // TODO: impl Display to iface
-            //info!("Added interface : \n {}", router_iface);
-        }
-
-        Ok(())
-    }
-
-    fn add_to_cache(&self, iface_def: &mut CowRpcIfaceDef) -> Result<()> {
-        let CowRpcIfaceDef {
-            ref mut id,
-            flags: _iflags,
-            name: ref iface_name,
-            ref mut procs,
-        } = iface_def;
-
-        if self.cache.set_ismember(Self::COW_IFACES_SET, iface_name)? {
-            *id = self
-                .cache
-                .hash_get(&Self::iface_hash_set_key(iface_name), "id")?
-                .unwrap_or(0);
-            for p in procs {
-                let CowRpcProcDef {
-                    id: ref mut proc_id,
-                    flags: _pflags,
-                    name: ref proc_name,
-                } = p;
-
-                if self.cache.set_ismember(&Self::proc_set_key(iface_name), proc_name)? {
-                    *proc_id = self
-                        .cache
-                        .hash_get(
-                            &Self::iface_hash_set_key(iface_name),
-                            &Self::iface_proc_field_key(proc_name),
-                        )?
-                        .unwrap_or(0);
-                } else {
-                    let _ = self.cache.set_add(&Self::proc_set_key(iface_name), &[proc_name])?;
-                    *proc_id = self.cache.set_card(&Self::proc_set_key(iface_name))? as u16;
-                    let _ = self.cache.hash_set(
-                        &Self::iface_hash_set_key(iface_name),
-                        &Self::iface_proc_field_key(proc_name),
-                        proc_id.clone(),
-                    )?;
-                }
-            }
-        } else {
-            // Add name to set in redis
-            let _ = self.cache.set_add(Self::COW_IFACES_SET, &[iface_name])?;
-            *id = self.cache.set_card(Self::COW_IFACES_SET)? as u16;
-
-            // Add values to hashset in redis
-            let _ = self
-                .cache
-                .hash_set(&Self::iface_hash_set_key(iface_name), "id", id.clone())?;
-
-            for p in procs {
-                let CowRpcProcDef {
-                    id: ref mut proc_id,
-                    flags: _pflags,
-                    name: ref proc_name,
-                } = p;
-
-                let _ = self.cache.set_add(&Self::proc_set_key(iface_name), &[proc_name])?;
-                *proc_id = self.cache.set_card(&Self::proc_set_key(iface_name))? as u16;
-                let _ = self.cache.hash_set(
-                    &Self::iface_hash_set_key(iface_name),
-                    &Self::iface_proc_field_key(proc_name),
-                    proc_id.clone(),
-                )?;
-            }
-        }
-
-        Ok(())
-    }
-
-    #[inline]
-    fn iface_hash_set_key(iface_name: &str) -> String {
-        format!("{}:{}", Self::COW_IFACE_HASH_SET, iface_name)
-    }
-
-    #[inline]
-    fn iface_proc_field_key(proc_name: &str) -> String {
-        format!("{}:{}", Self::COW_IFACE_PROC_FIELD, proc_name)
-    }
-
-    #[inline]
-    fn proc_set_key(iface_name: &str) -> String {
-        format!("{}:{}", Self::COW_PROCS_SET, iface_name)
-    }
 }
 
 #[derive(Clone)]

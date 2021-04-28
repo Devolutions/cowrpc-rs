@@ -9,7 +9,6 @@ use crate::error::CowRpcError;
 use crate::transport::tls::TlsOptions;
 use crate::CowRpcMessage;
 use async_trait::async_trait;
-use tokio::stream::StreamExt;
 
 mod tcp;
 mod tcp_listener;

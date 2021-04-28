@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use byteorder::{LittleEndian, ReadBytesExt};
 use futures::prelude::*;
 use futures::{self, ready};
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
