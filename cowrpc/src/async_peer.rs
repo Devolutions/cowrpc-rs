@@ -2,7 +2,11 @@ use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
 use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, Transport};
 use crate::transport::Uri;
-use crate::{proto, transport, CallFuture, CowRpcAsyncBindContext, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcIdentityType, CowRpcParams, CowRpcState, CowRpcAsyncReq, CowRpcCallContext};
+use crate::{
+    proto, transport, CallFuture, CowRpcAsyncBindContext, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq,
+    CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext,
+    CowRpcIdentityType, CowRpcParams, CowRpcState,
+};
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::prelude::*;
 use futures::ready;
@@ -512,10 +516,7 @@ struct CowRpcAsyncPeer {
 }
 
 impl CowRpcAsyncPeer {
-    pub fn new(
-        transport: CowRpcTransport,
-        on_http: Option<Box<HttpMsgCallback>>,
-    ) -> Self {
+    pub fn new(transport: CowRpcTransport, on_http: Option<Box<HttpMsgCallback>>) -> Self {
         let transport = transport;
         let (reader_stream, writer_sink) = transport.message_stream_sink();
 

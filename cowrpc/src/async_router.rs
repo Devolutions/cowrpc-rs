@@ -7,7 +7,7 @@ use crate::transport::tls::TlsOptions;
 use crate::transport::MessageInterceptor;
 use crate::{proto, CowRpcMessageInterceptor};
 use futures::channel::oneshot::{channel, Receiver, Sender};
-use futures::future::{BoxFuture};
+use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::StreamExt;
 
