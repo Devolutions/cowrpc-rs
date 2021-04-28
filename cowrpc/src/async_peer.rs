@@ -1,9 +1,9 @@
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
-use crate::proto::{CowRpcIfaceDef, Message, *};
+use crate::proto::{Message, *};
 use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, Transport};
 use crate::transport::Uri;
 use crate::{
-    proto, transport, AsyncServer, CallFuture, CowRpcAsyncBindContext, CowRpcAsyncBindReq, CowRpcAsyncBindRsp,
+    proto, transport, CallFuture, CowRpcAsyncBindContext, CowRpcAsyncBindReq, CowRpcAsyncBindRsp,
     CowRpcAsyncCallReq, CowRpcAsyncCallRsp, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncIdentifyReq,
     CowRpcAsyncIdentifyRsp, CowRpcAsyncIface, CowRpcAsyncReq, CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp,
     CowRpcAsyncUnbindReq, CowRpcAsyncUnbindRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext,
@@ -13,20 +13,17 @@ use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::prelude::*;
 use futures::ready;
 
-use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::atomic::{self, AtomicUsize};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::stream::StreamExt;
 use tokio::sync::{Mutex, RwLock};
 
 type HandleMonitor = Arc<Mutex<Option<PeerHandle>>>;
 type HandleMsgProcessor = Arc<RwLock<Option<CowRpcPeerAsyncMsgProcessor>>>;
 type HandleThreadHandle = Arc<Mutex<Option<std::thread::JoinHandle<Result<()>>>>>;
 type HttpMsgCallback = dyn Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>> + Send + Sync;
-type UnbindCallback = dyn Fn(Arc<CowRpcAsyncBindContext>) + Send + Sync;
 pub type PeerMonitor = Receiver<()>;
 
 pub struct PeerHandle {
@@ -51,7 +48,6 @@ struct CowRpcPeerSharedInner {
     state: Arc<RwLock<CowRpcState>>,
     requests: Arc<Mutex<Vec<CowRpcAsyncReq>>>,
     writer_sink: Arc<Mutex<CowSink<CowRpcMessage>>>,
-    on_unbind_callback: Arc<Option<Box<UnbindCallback>>>,
     on_http_msg_callback: Arc<Option<Box<HttpMsgCallback>>>,
 }
 
@@ -79,92 +75,7 @@ impl CowRpcPeerSharedInner {
     async fn transition_to_state(&self, new_state: CowRpcState) {
         *self.state.write().await = new_state;
     }
-
-    pub async fn get_iface(&self, iface_id: u16, is_local_id: bool) -> Option<Arc<RwLock<CowRpcAsyncIface>>> {
-        let ifaces = self.ifaces.read().await;
-
-        let ifaces = ifaces.deref();
-        for iface_mutex in ifaces.iter() {
-            let iface = iface_mutex.read().await;
-            if (is_local_id && iface.lid == iface_id) || (!is_local_id && iface.rid == iface_id) {
-                return Some(iface_mutex.clone());
-            }
-        }
-
-        None
-    }
-
-    async fn register_iface_def(&self, iface_def: &mut CowRpcIfaceDef, server: bool) -> Result<()> {
-        let ifaces = self.ifaces.write().await;
-        let mut iface_found = false;
-
-        let ifaces = ifaces.deref();
-        for iface in ifaces.iter() {
-            let mut iface = iface.write().await;
-            if iface_def.name.eq(&iface.name) {
-                iface_found = true;
-
-                if server {
-                    iface.rid = iface.lid;
-                    iface_def.id = iface.rid;
-                } else {
-                    iface.rid = iface_def.id;
-                }
-
-                for proc_def in iface_def.procs.iter_mut() {
-                    let mut proc_found = false;
-
-                    for procedure in iface.procs.iter_mut() {
-                        if proc_def.name.eq(&procedure.name) {
-                            proc_found = true;
-
-                            if server {
-                                procedure.rid = procedure.lid;
-                                proc_def.id = procedure.rid;
-                            } else {
-                                procedure.rid = proc_def.id;
-                            }
-                        }
-                    }
-
-                    if !proc_found {
-                        return Err(crate::error::CowRpcError::Proto(format!(
-                            "Proc name not found - ({})",
-                            proc_def.name
-                        )));
-                    }
-                }
-            }
-        }
-
-        if !iface_found {
-            return Err(crate::error::CowRpcError::Proto(format!(
-                "IFace name not found - ({})",
-                iface_def.name
-            )));
-        }
-
-        Ok(())
-    }
 }
-
-// struct CowRpcPeerAsyncMsgProcessorSender {
-//     pub writer_sink: Arc<Mutex<CowSink<CowRpcMessage>>>,
-//     pub msg_to_send: Option<CowRpcMessage>,
-// }
-
-// impl Future for CowRpcPeerAsyncMsgProcessorSender {
-//     type Output = Result<()>;
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         let mut writer = self.writer_sink.lock().await;
-//         let pin_writer = Pin::new(&mut**writer);
-//         if let Some(msg) = self.msg_to_send.take() {
-//             pin_writer.start_send(msg)?;
-//         }
-//         pin_writer.poll_flush(cx)
-//     }
-// }
 
 #[derive(Clone)]
 struct CowRpcPeerAsyncMsgProcessor {
@@ -176,63 +87,14 @@ impl CowRpcPeerAsyncMsgProcessor {
         let is_response = msg.is_response();
 
         match msg {
-            CowRpcMessage::Identity(header, msg) => {
-                if is_response {
-                    self.process_identify_rsp(header, msg).await
-                } else {
-                    self.process_identify_req(header, msg).await
-                }
-            }
-
             CowRpcMessage::Resolve(header, msg) => {
                 if is_response {
                     self.process_resolve_rsp(header, msg).await
                 } else {
-                    self.process_resolve_req(header, msg).await
-                }
-            }
-
-            CowRpcMessage::Bind(header, msg) => {
-                if is_response {
-                    self.process_bind_rsp(header, msg).await
-                } else {
-                    self.process_bind_req(header, msg).await
-                }
-            }
-
-            CowRpcMessage::Unbind(header, msg) => {
-                if is_response {
-                    self.process_unbind_rsp(header, msg).await
-                } else {
-                    self.process_unbind_req(header, msg).await
-                }
-            }
-
-            CowRpcMessage::Call(header, msg, mut payload) => {
-                if is_response {
-                    Err(CowRpcError::Proto(
-                        "Received unexpected call msg on which the response flag has been set".to_string(),
-                    ))
-                } else {
-                    self.process_call_req(header, msg, &mut payload).await
-                }
-            }
-
-            CowRpcMessage::Result(header, msg, payload) => {
-                if is_response {
-                    self.process_result_rsp(header, msg, payload).await
-                } else {
-                    Err(CowRpcError::Proto(
-                        "Received unexpected result msg on which the response flag has not been set".to_string(),
-                    ))
-                }
-            }
-
-            CowRpcMessage::Terminate(header) => {
-                if is_response {
-                    self.process_terminate_rsp(header).await
-                } else {
-                    self.process_terminate_req(header).await
+                    Err(CowRpcError::Proto(format!(
+                        "Received unexpected resolve request : {:?}",
+                        msg
+                    )))
                 }
             }
 
@@ -252,56 +114,31 @@ impl CowRpcPeerAsyncMsgProcessor {
                 }
             }
 
+            CowRpcMessage::Terminate(header) => {
+                if is_response {
+                    self.process_terminate_rsp(header).await
+                } else {
+                    self.process_terminate_req(header).await
+                }
+            }
+
+            mut msg if !is_response && matches!(msg, CowRpcMessage::Bind(..) | CowRpcMessage::Unbind(..)) => {
+                msg.swap_src_dst();
+                msg.add_flag(CowRpcErrorCode::NotImplemented.into());
+                self.send_message(msg).await
+            }
+
+            CowRpcMessage::Call(header, msg, _payload) if !is_response => {
+                // Call are deprecated, we send back an error
+                self.send_result_rsp(header.src_id, msg, None, CowRpcErrorCode::NotImplemented.into())
+                    .await
+            }
+
             unexpected_msg => Err(CowRpcError::Proto(format!(
                 "Received unexpected msg : {:?}",
                 unexpected_msg
             ))),
         }
-    }
-
-    async fn process_identify_rsp(&self, header: CowRpcHdr, msg: CowRpcIdentityMsg) -> Result<()> {
-        let msg_clone = msg.clone();
-
-        let req_opt = self
-            .remove_request(move |req| {
-                match *req {
-                    CowRpcAsyncReq::Identify(ref identify_req) => identify_req.name.eq(&msg_clone.identity),
-                    _ => false, /* Wrong request type, we move to the next one */
-                }
-            })
-            .await?;
-
-        if let Some(mut req) = req_opt {
-            match req {
-                CowRpcAsyncReq::Identify(ref mut identify_req) => {
-                    if let Err(e) = identify_req
-                        .tx
-                        .take()
-                        .expect("Cannot Send twice on request oneshot channel")
-                        .send(CowRpcAsyncIdentifyRsp {
-                            error: CowRpcErrorCode::from(header.flags),
-                        })
-                    {
-                        return Err(CowRpcError::Internal(format!(
-                            "Unable to send response through futures oneshot channel: {:?}",
-                            e
-                        )));
-                    }
-                }
-                _ => {} /* Wrong request type, we move to the next one */
-            }
-
-            Ok(())
-        } else {
-            Err(CowRpcError::Internal(format!("Unable to find the matching request")))
-        }
-    }
-
-    async fn process_identify_req(&self, _: CowRpcHdr, msg: CowRpcIdentityMsg) -> Result<()> {
-        Err(CowRpcError::Proto(format!(
-            "Received unexpected identify request : {}",
-            msg.identity
-        )))
     }
 
     async fn process_verify_rsp(&self, header: CowRpcHdr, msg: CowRpcVerifyMsg, payload: Vec<u8>) -> Result<()> {
@@ -480,267 +317,6 @@ impl CowRpcPeerAsyncMsgProcessor {
         Ok(())
     }
 
-    async fn process_resolve_req(&self, _: CowRpcHdr, msg: CowRpcResolveMsg) -> Result<()> {
-        Err(CowRpcError::Proto(format!(
-            "Received unexpected resolve request : {:?}",
-            msg
-        )))
-    }
-
-    async fn process_bind_rsp(&self, header: CowRpcHdr, msg: CowRpcBindMsg) -> Result<()> {
-        let msg_clone = msg.clone();
-        let req_opt = self
-            .remove_request(move |req| {
-                if let CowRpcAsyncReq::Bind(ref bind_req) = req {
-                    bind_req.server_id == header.src_id && bind_req.iface_id == msg_clone.ifaces[0].id
-                } else {
-                    false
-                }
-            })
-            .await?;
-
-        if let Some(mut req) = req_opt {
-            if let CowRpcAsyncReq::Bind(ref mut bind_req) = req {
-                if bind_req.server_id == header.src_id && bind_req.iface_id == msg.ifaces[0].id {
-                    let mut error = CowRpcErrorCode::from(msg.ifaces[0].flags);
-                    if error == CowRpcErrorCode::Success {
-                        error = CowRpcErrorCode::from(header.flags);
-                    }
-
-                    if let Err(e) = bind_req
-                        .tx
-                        .take()
-                        .expect("Cannot Send twice on request oneshot channel")
-                        .send(CowRpcAsyncBindRsp { error })
-                    {
-                        return Err(CowRpcError::Internal(format!(
-                            "Unable to send response through futures oneshot channel: {:?}",
-                            e
-                        )));
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn process_bind_req(&self, header: CowRpcHdr, msg: CowRpcBindMsg) -> Result<()> {
-        for msg_iface in msg.ifaces {
-            // Clone the iface_def to update the flags
-            let mut iface_def = msg_iface.clone();
-            let flag_result;
-
-            let self_clone = self.clone();
-
-            if let Some(iface) = self.inner.get_iface(msg_iface.id, false).await {
-                {
-                    let mut bind_contexts = self.inner.bind_contexts.write().await;
-                    let mut bind_context_found = false;
-                    for bind_context in &*bind_contexts {
-                        if !bind_context.is_server
-                            && bind_context.remote_id == header.src_id
-                            && bind_context.iface.get_remote_id().await == iface.get_remote_id().await
-                        {
-                            bind_context_found = true;
-                            break;
-                        }
-                    }
-
-                    if !bind_context_found {
-                        // Success : New bind context
-                        let new_bind_context = CowRpcAsyncBindContext::new(true, header.src_id, &iface);
-                        bind_contexts.push(new_bind_context);
-                        flag_result = CowRpcErrorCode::Success;
-                    } else {
-                        // Already bound
-                        iface_def.flags = CowRpcErrorCode::AlreadyBound.into();
-                        flag_result = CowRpcErrorCode::AlreadyBound;
-                    }
-                }
-
-                // TODO : Should we return error ?
-                let _ = self_clone
-                    .send_bind_rsp(header.src_id, iface_def, flag_result.into())
-                    .await;
-            } else {
-                // Interface doesn't exist
-                iface_def.flags = CowRpcErrorCode::IfaceId.into();
-                flag_result = CowRpcErrorCode::IfaceId;
-
-                // TODO : Should we return error ?
-                let _ = self.send_bind_rsp(header.src_id, iface_def, flag_result.into()).await;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn process_unbind_rsp(&self, header: CowRpcHdr, msg: CowRpcUnbindMsg) -> Result<()> {
-        let msg_clone = msg.clone();
-        let req_opt = self
-            .remove_request(move |req| {
-                if let CowRpcAsyncReq::Unbind(ref unbind_req) = req {
-                    let from_client = header.flags & COW_RPC_FLAG_SERVER == 0;
-                    if unbind_req.from_client != from_client {
-                        return false;
-                    }
-
-                    header.src_id == unbind_req.remote_id && msg_clone.ifaces[0].id == unbind_req.iface_id
-                } else {
-                    false
-                }
-            })
-            .await?;
-
-        if let Some(mut req) = req_opt {
-            if let CowRpcAsyncReq::Unbind(ref mut unbind_req) = req {
-                if let Err(e) = unbind_req
-                    .tx
-                    .take()
-                    .expect("Cannot Send twice on request oneshot channel")
-                    .send(CowRpcAsyncUnbindRsp {
-                        error: CowRpcErrorCode::from(header.flags),
-                    })
-                {
-                    return Err(CowRpcError::Internal(format!(
-                        "Unable to send response through futures oneshot channel: {:?}",
-                        e
-                    )));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn process_unbind_req(&self, header: CowRpcHdr, msg: CowRpcUnbindMsg) -> Result<()> {
-        let from_client = header.flags & COW_RPC_FLAG_SERVER == 0;
-
-        for msg_iface in msg.ifaces {
-            // Clone the iface_def to update the flags
-            let mut iface_def = msg_iface.clone();
-            let mut flag_result = CowRpcErrorCode::Success;
-
-            // Try to get the iface with the iface_id
-            let iface = self.inner.get_iface(msg_iface.id, false).await;
-
-            let self_clone = self.clone();
-
-            if iface.is_some() {
-                let bind_context_removed_opt = self
-                    .remove_bind_context(from_client, header.src_id, msg_iface.id)
-                    .await?;
-                if let Some(bind_context_removed) = bind_context_removed_opt {
-                    flag_result = CowRpcErrorCode::Success;
-
-                    let clone = self_clone.clone();
-                    if let Some(ref callback) = *clone.inner.on_unbind_callback {
-                        callback(bind_context_removed);
-                    }
-                } else {
-                    iface_def.flags = CowRpcErrorCode::NotBound.into();
-                    flag_result = CowRpcErrorCode::NotBound;
-                }
-
-                // TODO Should we return error?
-                let _ = self_clone
-                    .send_unbind_rsp(header.src_id, iface_def, flag_result.into())
-                    .await;
-            } else {
-                iface_def.flags = CowRpcErrorCode::IfaceId.into();
-                flag_result = CowRpcErrorCode::IfaceId;
-
-                // TODO : Should we return error ?
-                let _ = self.send_unbind_rsp(header.src_id, iface_def, flag_result.into()).await;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn process_call_req(&self, header: CowRpcHdr, msg: CowRpcCallMsg, mut payload: &mut Vec<u8>) -> Result<()> {
-        // Try to get the iface with the iface_id
-        let iface = self.inner.get_iface(msg.iface_id, false).await;
-
-        let flag;
-        let mut output_param = None;
-
-        match iface {
-            Some(iface) => {
-                let iface = iface.read().await;
-                if let Some(procedure) = iface.get_proc(msg.proc_id, false) {
-                    match &iface.server {
-                        Some(ref server) => {
-                            let self_clone = self.clone();
-                            match server.dispatch_call(header.src_id, procedure.lid, &mut payload).await {
-                                Ok(call_result) => {
-                                    output_param = Some(call_result);
-                                    flag = CowRpcErrorCode::Success;
-                                }
-                                Err(e) => match e {
-                                    crate::error::CowRpcError::CowRpcFailure(error_code) => flag = error_code,
-                                    _ => flag = CowRpcErrorCode::Internal,
-                                },
-                            }
-                            return self_clone
-                                .send_result_rsp(header.src_id, msg, output_param, flag.into())
-                                .await;
-                        }
-                        None => {
-                            flag = CowRpcErrorCode::Internal;
-                        }
-                    }
-                } else {
-                    flag = CowRpcErrorCode::ProcId
-                }
-            }
-            None => {
-                flag = CowRpcErrorCode::IfaceId;
-            }
-        }
-
-        self.send_result_rsp(header.src_id, msg, output_param, flag.into())
-            .await
-    }
-
-    async fn process_result_rsp(&self, header: CowRpcHdr, msg: CowRpcResultMsg, payload: Vec<u8>) -> Result<()> {
-        let msg_clone = msg.clone();
-
-        let req_opt = self
-            .remove_request(move |req| {
-                if let CowRpcAsyncReq::Call(ref call_req) = req {
-                    call_req.call_id == msg.call_id
-                        && call_req.iface_id == msg_clone.iface_id
-                        && call_req.proc_id == msg.proc_id
-                } else {
-                    false
-                }
-            })
-            .await?;
-
-        if let Some(mut req) = req_opt {
-            if let CowRpcAsyncReq::Call(ref mut call_req) = req {
-                if let Err(e) = call_req
-                    .tx
-                    .take()
-                    .expect("Cannot Send twice on request oneshot channel")
-                    .send(CowRpcAsyncCallRsp {
-                        error: CowRpcErrorCode::from(header.flags),
-                        msg_pack: payload.to_owned(),
-                    })
-                {
-                    return Err(CowRpcError::Internal(format!(
-                        "Unable to send response through futures oneshot channel: {:?}",
-                        e
-                    )));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     async fn process_terminate_rsp(&self, _: CowRpcHdr) -> Result<()> {
         self.inner.transition_to_state(CowRpcState::TERMINATE).await;
         Ok(())
@@ -748,44 +324,6 @@ impl CowRpcPeerAsyncMsgProcessor {
 
     async fn process_terminate_req(&self, header: CowRpcHdr) -> Result<()> {
         self.send_terminate_rsp(header.src_id).await
-    }
-
-    async fn send_bind_rsp(&self, dst_id: u32, iface_def: CowRpcIfaceDef, flags: u16) -> Result<()> {
-        let iface_defs = vec![iface_def];
-
-        let mut header = CowRpcHdr {
-            msg_type: proto::COW_RPC_BIND_MSG_ID,
-            flags: COW_RPC_FLAG_RESPONSE | flags,
-            src_id: self.inner.get_id().await,
-            dst_id,
-            ..Default::default()
-        };
-
-        let msg = CowRpcBindMsg { ifaces: iface_defs };
-
-        header.size = header.get_size() + msg.get_size();
-        header.offset = header.get_size() as u8;
-
-        self.send_message(CowRpcMessage::Bind(header, msg)).await
-    }
-
-    async fn send_unbind_rsp(&self, dst_id: u32, iface_def: CowRpcIfaceDef, flags: u16) -> Result<()> {
-        let iface_defs = vec![iface_def];
-
-        let mut header = CowRpcHdr {
-            msg_type: proto::COW_RPC_UNBIND_MSG_ID,
-            flags: COW_RPC_FLAG_RESPONSE | flags,
-            src_id: self.inner.get_id().await,
-            dst_id: dst_id,
-            ..Default::default()
-        };
-
-        let msg = CowRpcUnbindMsg { ifaces: iface_defs };
-
-        header.size = header.get_size() + msg.get_size();
-        header.offset = header.get_size() as u8;
-
-        self.send_message(CowRpcMessage::Unbind(header, msg)).await
     }
 
     async fn send_result_rsp(
@@ -879,60 +417,6 @@ impl CowRpcPeerAsyncMsgProcessor {
         self.send_message(CowRpcMessage::Terminate(header)).await
     }
 
-    async fn remove_bind_context(
-        &self,
-        is_server: bool,
-        remote_id: u32,
-        iface_rid: u16,
-    ) -> Result<Option<Arc<CowRpcAsyncBindContext>>> {
-        let mut bind_context_removed = None;
-        let mut index = 0;
-
-        let mut bind_contexts = self.inner.bind_contexts.write().await;
-
-        // TODO Can we do better ?
-        for bind_context in &*bind_contexts {
-            if (bind_context.is_server == is_server)
-                && (bind_context.remote_id == remote_id)
-                && bind_context.iface.get_remote_id().await == iface_rid
-            {
-                bind_context_removed = Some(bind_contexts.remove(index));
-                break;
-            }
-            index += 1;
-        }
-        // let bind_context_removed = bind_contexts
-        //     .iter()
-        //     .position(|bind_context| {
-        //         (bind_context.is_server == is_server)
-        //             && (bind_context.remote_id == remote_id)
-        //             && bind_context.iface.get_remote_id().await == iface_rid
-        //     })
-        //     .map(|position| bind_contexts.remove(position));
-
-        Ok(bind_context_removed)
-    }
-
-    async fn send_identify_req(&self, name: &str, typ: CowRpcIdentityType) -> Result<()> {
-        let mut header = CowRpcHdr {
-            msg_type: proto::COW_RPC_IDENTIFY_MSG_ID,
-            src_id: self.inner.get_id().await,
-            dst_id: self.inner.get_router_id().await,
-            ..Default::default()
-        };
-
-        let identity = CowRpcIdentityMsg {
-            typ: typ,
-            flags: 0,
-            identity: String::from(name),
-        };
-
-        header.size = header.get_size() + identity.get_size();
-        header.offset = header.get_size() as u8;
-
-        self.send_message(CowRpcMessage::Identity(header, identity)).await
-    }
-
     async fn send_verify_req(&self, call_id: u32, payload: Vec<u8>) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_VERIFY_MSG_ID,
@@ -984,95 +468,6 @@ impl CowRpcPeerAsyncMsgProcessor {
         self.send_message(CowRpcMessage::Resolve(header, msg)).await
     }
 
-    async fn send_bind_req(&self, server_id: u32, iface: &Arc<RwLock<CowRpcAsyncIface>>) -> Result<()> {
-        let iface = iface.read().await;
-        let iface_def = build_ifacedef(&(*iface), false, true);
-        let iface_defs = vec![iface_def];
-
-        let mut header = CowRpcHdr {
-            msg_type: proto::COW_RPC_BIND_MSG_ID,
-            src_id: self.inner.get_id().await,
-            dst_id: server_id,
-            ..Default::default()
-        };
-
-        let msg = CowRpcBindMsg { ifaces: iface_defs };
-
-        header.size = header.get_size() + msg.get_size();
-        header.offset = header.get_size() as u8;
-
-        self.send_message(CowRpcMessage::Bind(header, msg)).await
-    }
-
-    async fn send_unbind_req(
-        &self,
-        remote_id: u32,
-        remote_is_server: bool,
-        iface: &Arc<RwLock<CowRpcAsyncIface>>,
-    ) -> Result<()> {
-        let iface = iface.read().await;
-        let iface_def = build_ifacedef(&iface, false, false);
-        let iface_defs = vec![iface_def];
-
-        let mut header = CowRpcHdr {
-            msg_type: proto::COW_RPC_UNBIND_MSG_ID,
-            flags: if !remote_is_server { COW_RPC_FLAG_SERVER } else { 0 },
-            src_id: self.inner.get_id().await,
-            dst_id: remote_id,
-            ..Default::default()
-        };
-
-        let msg = CowRpcUnbindMsg { ifaces: iface_defs };
-
-        header.size = header.get_size() + msg.get_size();
-        header.offset = header.get_size() as u8;
-
-        self.send_message(CowRpcMessage::Unbind(header, msg)).await
-    }
-
-    async fn send_call_req<T: CowRpcParams>(
-        &self,
-        bind_context: Arc<CowRpcAsyncBindContext>,
-        proc_id: u16,
-        call_id: u32,
-        params: T,
-    ) -> Result<()> {
-        let iface = &bind_context.iface;
-        let iface = iface.read().await;
-
-        if let Some(procedure) = iface.get_proc(proc_id, true) {
-            let mut header = CowRpcHdr {
-                msg_type: proto::COW_RPC_CALL_MSG_ID,
-                src_id: self.inner.get_id().await,
-                dst_id: bind_context.remote_id,
-                ..Default::default()
-            };
-
-            let msg = CowRpcCallMsg {
-                call_id,
-                iface_id: iface.rid,
-                proc_id: procedure.rid,
-            };
-
-            let param_size = match params.get_size() {
-                Ok(size) => size,
-                Err(e) => return Err(e.into()),
-            };
-
-            header.size = header.get_size() + msg.get_size() + param_size;
-            header.offset = (header.get_size() + msg.get_size()) as u8;
-
-            let mut payload = Vec::new();
-            if let Err(e) = params.write_to(&mut payload) {
-                return Err(e.into());
-            }
-
-            self.send_message(CowRpcMessage::Call(header, msg, payload)).await
-        } else {
-            Err(CowRpcError::Proto("Proc not found".to_string()))
-        }
-    }
-
     async fn send_terminate_req(&self) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_TERMINATE_MSG_ID,
@@ -1088,15 +483,9 @@ impl CowRpcPeerAsyncMsgProcessor {
     }
 
     async fn send_message(&self, msg: CowRpcMessage) -> Result<()> {
-        // TODO CowRpcPeerAsyncMsgProcessorSender could be removed ?
         let mut writer = self.inner.writer_sink.lock().await;
         writer.send(msg).await?;
         Ok(())
-
-        // Box::new(CowRpcPeerAsyncMsgProcessorSender {
-        //     writer_sink: self.inner.writer_sink.clone(),
-        //     msg_to_send: Some(msg),
-        // }).await
     }
 
     async fn add_request(&self, req: CowRpcAsyncReq) -> Result<()> {
@@ -1126,39 +515,6 @@ impl CowRpcPeerAsyncMsgProcessor {
     }
 }
 
-// TODO REMOVE
-// struct CowRpcAsyncPeerSend(pub Option<CowRpcAsyncPeer>, pub Option<CowRpcMessage>);
-//
-// impl Future for CowRpcAsyncPeerSend {
-//     type Output = Result<CowRpcAsyncPeer>;
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         let res = {
-//             let peer = self
-//                 .0
-//                 .as_mut()
-//                 .take()
-//                 .expect("An async peer send was created without an asyncPeer ctx");
-//             let mut writer = peer.inner.writer_sink.lock();
-//             let pin_writer = Pin::new(&mut **writer);
-//             if let Some(msg) = self.1.take() {
-//                 pin_writer.start_send(msg)?;
-//             }
-//             pin_writer.poll_flush(cx)?
-//         };
-//
-//         if let Poll::Ready(_) = res {
-//             let peer = self
-//                 .0
-//                 .take()
-//                 .expect("An async peer send was created without an asyncPeer ctx");
-//             Poll::Ready(Ok(peer))
-//         } else {
-//             Poll::Pending
-//         }
-//     }
-// }
-
 struct CowRpcAsyncPeer {
     inner: CowRpcPeerSharedInner,
     reader_stream: CowStreamEx<CowRpcMessage>,
@@ -1169,7 +525,6 @@ impl CowRpcAsyncPeer {
         transport: CowRpcTransport,
         mode: CowRpcMode,
         ifaces: Vec<Arc<RwLock<CowRpcAsyncIface>>>,
-        on_unbind: Option<Box<UnbindCallback>>,
         on_http: Option<Box<HttpMsgCallback>>,
     ) -> Self {
         let transport = transport;
@@ -1185,7 +540,6 @@ impl CowRpcAsyncPeer {
                 state: Arc::new(RwLock::new(CowRpcState::INITIAL)),
                 requests: Arc::new(Mutex::new(Vec::new())),
                 writer_sink: Arc::new(Mutex::new(writer_sink)),
-                on_unbind_callback: Arc::new(on_unbind),
                 on_http_msg_callback: Arc::new(on_http),
             },
             reader_stream,
@@ -1229,7 +583,7 @@ impl CowRpcAsyncPeer {
         self.inner.set_id(header.dst_id).await;
         self.inner.set_router_id(header.src_id).await;
 
-        self.inner.transition_to_state(CowRpcState::ACTIVE);
+        self.inner.transition_to_state(CowRpcState::ACTIVE).await;
 
         Ok(())
     }
@@ -1303,7 +657,6 @@ async fn client_handshake(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer
 pub struct CowRpcPeer {
     url: String,
     connection_timeout: Option<Duration>,
-    is_server: bool,
     mode: CowRpcMode,
     ifaces: Vec<Arc<RwLock<CowRpcAsyncIface>>>,
     #[allow(dead_code)]
@@ -1311,16 +664,11 @@ pub struct CowRpcPeer {
     peer_handle_inner: HandleMsgProcessor,
     #[allow(dead_code)]
     thread_handle: HandleThreadHandle,
-    on_unbind_callback: Option<Box<UnbindCallback>>,
     on_http_msg_callback: Option<Box<HttpMsgCallback>>,
 }
 
 impl CowRpcPeer {
-    pub fn new_client(
-        url: &str,
-        connection_timeout: Option<Duration>,
-        mode: CowRpcMode,
-    ) -> (CowRpcPeer, CowRpcPeerHandle) {
+    pub fn new(url: &str, connection_timeout: Option<Duration>, mode: CowRpcMode) -> (CowRpcPeer, CowRpcPeerHandle) {
         let (handle, monitor) = channel();
         let peer_handle_inner = Arc::new(RwLock::new(None));
         let thread_handle = Arc::new(Mutex::new(None));
@@ -1331,13 +679,11 @@ impl CowRpcPeer {
             CowRpcPeer {
                 url: url.to_string(),
                 connection_timeout,
-                is_server: false,
                 mode,
                 ifaces: Vec::new(),
                 monitor,
                 peer_handle_inner: peer_handle_inner.clone(),
                 thread_handle: thread_handle.clone(),
-                on_unbind_callback: None,
                 on_http_msg_callback: None,
             },
             CowRpcPeerHandle {
@@ -1348,51 +694,17 @@ impl CowRpcPeer {
         )
     }
 
-    pub fn new_server(listener_url: &str) -> (CowRpcPeer, CowRpcPeerHandle) {
-        let (handle, monitor) = channel();
-        let peer_handle_inner = Arc::new(RwLock::new(None));
-        let thread_handle = Arc::new(Mutex::new(None));
-
-        let peer_handle = PeerHandle { sender: handle };
-
-        (
-            CowRpcPeer {
-                url: listener_url.to_string(),
-                connection_timeout: None,
-                is_server: true,
-                mode: CowRpcMode::DIRECT,
-                ifaces: Vec::new(),
-                monitor,
-                peer_handle_inner: peer_handle_inner.clone(),
-                thread_handle: thread_handle.clone(),
-                on_unbind_callback: None,
-                on_http_msg_callback: None,
-            },
-            CowRpcPeerHandle {
-                monitor: Arc::new(Mutex::new(Some(peer_handle))),
-                peer: peer_handle_inner,
-                thread_handle,
-            },
-        )
-    }
-
-    pub async fn run_server(self) -> Result<()> {
-        unimplemented!()
-    }
-
-    pub async fn run_client(self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         use std::str::FromStr;
 
         let CowRpcPeer {
             url,
             connection_timeout,
-            is_server: _,
             mode,
             ifaces,
             monitor: _,
             peer_handle_inner,
             thread_handle: _,
-            on_unbind_callback,
             on_http_msg_callback,
         } = self;
 
@@ -1405,7 +717,7 @@ impl CowRpcPeer {
 
         let mut peer = match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri)).await {
             Ok(Ok(transport)) => {
-                let peer = CowRpcAsyncPeer::new(transport, mode, ifaces, on_unbind_callback, on_http_msg_callback);
+                let peer = CowRpcAsyncPeer::new(transport, mode, ifaces, on_http_msg_callback);
                 peer.handshake().await?
             }
             Ok(Err(e)) => {
@@ -1444,52 +756,6 @@ impl CowRpcPeer {
                 }
             }
         }
-    }
-
-    pub async fn run(self) -> Result<()> {
-        if self.is_server {
-            self.run_server().await
-        } else {
-            self.run_client().await
-        }
-    }
-
-    // TODO REMOVE
-    // pub fn register_iface(&mut self, iface_reg: CowRpcIfaceReg, server: Option<Box<dyn AsyncServer>>) -> Result<u16> {
-    //     let iface_id = self.ifaces.len() as u16;
-    //
-    //     let mut iface = CowRpcAsyncIface {
-    //         name: String::from(iface_reg.name),
-    //         lid: iface_id,
-    //         rid: 0,
-    //         procs: Vec::new(),
-    //         server,
-    //     };
-    //
-    //     for procedure in iface_reg.procs {
-    //         iface.procs.push(CowRpcProc {
-    //             lid: procedure.id,
-    //             rid: 0,
-    //             name: String::from(procedure.name),
-    //         })
-    //     }
-    //
-    //     self.ifaces.push(Arc::new(RwLock::new(iface)));
-    //     Ok(iface_id)
-    // }
-    //
-    // pub async fn set_iface_server(&mut self, iface_id: u16, server: Option<Box<dyn AsyncServer>>) {
-    //     for iface_mutex in self.ifaces.iter() {
-    //         let mut iface = iface_mutex.write().await;
-    //         if iface.lid == iface_id {
-    //             iface.set_server(server);
-    //             break;
-    //         }
-    //     }
-    // }
-
-    pub fn on_unbind_callback<F: 'static + Send + Sync + Fn(Arc<CowRpcAsyncBindContext>)>(&mut self, callback: F) {
-        self.on_unbind_callback = Some(Box::new(callback));
     }
 
     pub fn on_http_msg_callback<F: 'static + Send + Sync + Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>>>(
@@ -1732,61 +998,4 @@ impl CowRpcPeerHandle {
             ))
         }
     }
-}
-
-async fn build_ifacedef_list(
-    ifaces: &Vec<Arc<RwLock<CowRpcAsyncIface>>>,
-    with_names: bool,
-    with_procs: bool,
-) -> Vec<CowRpcIfaceDef> {
-    let mut iface_def_list = Vec::new();
-
-    for iface in ifaces {
-        let iface = iface.write().await;
-        let iface_def = build_ifacedef(&(*iface), with_names, with_procs);
-        iface_def_list.push(iface_def);
-    }
-
-    return iface_def_list;
-}
-
-fn build_ifacedef(iface: &CowRpcAsyncIface, with_names: bool, with_procs: bool) -> CowRpcIfaceDef {
-    let mut iface_def = CowRpcIfaceDef::default();
-    iface_def.id = iface.rid;
-
-    if with_names {
-        iface_def.flags |= COW_RPC_DEF_FLAG_NAMED;
-        iface_def.name = iface.name.clone();
-    }
-
-    if with_procs {
-        iface_def.procs = build_proc_def_list(&iface.procs, with_names);
-    } else {
-        iface_def.flags |= COW_RPC_DEF_FLAG_EMPTY;
-    }
-
-    return iface_def;
-}
-
-fn build_proc_def_list(procs: &Vec<CowRpcProc>, with_name: bool) -> Vec<CowRpcProcDef> {
-    let mut proc_def_list = Vec::new();
-
-    for procedure in procs {
-        let proc_def = build_proc_def(procedure, with_name);
-        proc_def_list.push(proc_def);
-    }
-
-    return proc_def_list;
-}
-
-fn build_proc_def(procedure: &CowRpcProc, with_name: bool) -> CowRpcProcDef {
-    let mut proc_def = CowRpcProcDef::default();
-    proc_def.id = procedure.lid;
-
-    if with_name {
-        proc_def.flags |= COW_RPC_DEF_FLAG_NAMED;
-        proc_def.name = procedure.name.clone();
-    }
-
-    return proc_def;
 }

@@ -11,7 +11,7 @@ use std::time::Duration;
 async fn main() {
     env_logger::init();
 
-    let (peer, peer_handle) = CowRpcPeer::new_client("tcp://127.0.0.1:12346", None, cowrpc::CowRpcMode::ROUTED);
+    let (peer, peer_handle) = CowRpcPeer::new("tcp://127.0.0.1:12346", None, cowrpc::CowRpcMode::ROUTED);
 
     let task_handle = tokio::spawn(peer.run());
 
