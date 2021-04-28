@@ -6,12 +6,6 @@ extern crate log;
 extern crate env_logger;
 extern crate tokio;
 
-use futures::future::BoxFuture;
-
-use cowrpc::async_router::CowRpcRouter;
-use cowrpc::transport::tls::{TlsOptionsBuilder};
-use futures::FutureExt;
-
 #[tokio::main]
 async fn main() {
     env_logger::init();

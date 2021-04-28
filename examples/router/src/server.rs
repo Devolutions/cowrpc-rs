@@ -7,13 +7,15 @@ use std::time::Duration;
 use log::{info, error};
 use cowrpc::async_peer::CowRpcPeer;
 use futures::future::err;
+use cowrpc::{CowRpcCallContext, CallFuture};
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
 
-    let (peer, peer_handle) = CowRpcPeer::new_client("tcp://127.0.0.1:12346", None, cowrpc::CowRpcMode::ROUTED);
+    let (mut peer, peer_handle) = CowRpcPeer::new_client("tcp://127.0.0.1:12346", None, cowrpc::CowRpcMode::ROUTED);
 
+    peer.on_http_msg_callback(on_http_call);
     let task_handle = tokio::spawn(peer.run());
 
     // TODO : REMOVE THAT
@@ -30,60 +32,13 @@ async fn main() {
     if let Ok(Err(e)) = task_handle.await {
         error!("Server stopped with error: {}", e);
     }
+}
 
-    // let task_handle = tokio::spawn(async move {
-    //     peer.spawn().await
-    // });
-    // peer_handle.identify_async("server", CowRpcIdentityType::UPN, Duration::from_secs(10)).await.expect("identify failed");
-    //
-    // if let Err(e) = task_handle.await {
-    //     error!("Failed to run router: {}", e);
-    // }
-    // let (cancel_handle, _cancel_event) = CancelEvent::new();
-    // let rpc = Arc::new(CowRpc::new(cowrpc::CowRpcRole::PEER, cowrpc::CowRpcMode::ROUTED));
-    //
-    // let test_iface = TestIface;
-    // let _ = rpc
-    //     .register_iface(
-    //         cow_test_iface_get_def(),
-    //         Some(Box::new(test_cow::ServerDispatch::new(test_iface))),
-    //     ).expect("register_iface failed");
-    //
-    // let test2_iface = Test2Iface;
-    // let _ = rpc
-    //     .register_iface(
-    //         cow_test2_iface_get_def(),
-    //         Some(Box::new(test2_cow::ServerDispatch::new(test2_iface))),
-    //     ).expect("register_iface failed");
-    //
-    // let iface_name_iface = IfaceNameIface;
-    // let _ = rpc
-    //     .register_iface(
-    //         cow_ifacename_iface_get_def(),
-    //         Some(Box::new(iface_cow::ServerDispatch::new(iface_name_iface))),
-    //     ).expect("register_iface failed");
-    //
-    // let tls_options = TlsOptionsBuilder::new()
-    //     .add_root_certificate(Certificate::from_der(include_bytes!("../certs/rootCA.der").to_vec()))
-    //     .connector()
-    //     .unwrap();
-    //
-    // let peer = Client::new(&rpc, "wss://router.local:12345")
-    //     .timeout(Duration::from_secs(10))
-    //     .tls_options(tls_options)
-    //     .connect()
-    //     .expect("client_connect failed");
-    //
-    // CowRpcPeer::start(&peer);
-    //
-    // peer.identify_sync(
-    //     "server",
-    //     CowRpcIdentityType::UPN,
-    //     Duration::from_secs(10),
-    //     Some(&cancel_handle),
-    // ).expect("Identify failed");
-    //
-    // let _ = peer.wait_thread_to_finish();
-    //
-    // peer.stop(None).expect("stop failed");
+fn on_http_call(ctx: CowRpcCallContext, request: &mut [u8]) -> CallFuture<Vec<u8>> {
+    let req_string = String::from_utf8_lossy(request).to_string();
+    info!("HTTP call received from {}: \r\n {}", ctx.get_caller_id(), req_string);
+
+    Box::new(
+        futures::future::ok(b"HTTP/1.1 200 OK\r\n\r\n".to_vec())
+    )
 }
