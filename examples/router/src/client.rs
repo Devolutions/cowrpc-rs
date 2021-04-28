@@ -15,11 +15,14 @@ async fn main() {
 
     let task_handle = tokio::spawn(peer.run());
 
-    // TODO : REMOVE THAT
+    // TODO : Find a way to remove that
     std::thread::sleep(Duration::from_secs(2));
 
     let server_id = peer_handle.resolve_async("server", Duration::from_secs(10)).await.expect("resolve failed");
     info!("server cow_id = {:#010X}", server_id);
+
+    let server_name = peer_handle.resolve_reverse_async(server_id, Duration::from_secs(10)).await.expect("reverse resolve failed");
+    info!("server name = {}", server_name);
 
     let mut http_req = format!("GET {} HTTP/1.1 \r\n", "/");
     http_req.push_str("\r\n");

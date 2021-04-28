@@ -12,7 +12,7 @@ use std::sync::{
 };
 use std::time::Duration;
 use crate::transport::{
-    r#async::{CowRpcTransport, Transport, CowFuture, CowSink, CowStreamEx},
+    r#async::{CowRpcTransport, Transport, CowSink, CowStreamEx},
     Uri,
 };
 use std::task::{Context, Poll};
