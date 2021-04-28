@@ -1,13 +1,10 @@
 extern crate cowrpc;
-#[macro_use]
-extern crate cowrpc_derive;
 extern crate rmp;
 
-use std::io;
 use std::process::exit;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
+use std::{io, thread};
 
 use cowrpc::error::CowRpcError;
 use cowrpc::peer::CowRpcPeer;
@@ -18,7 +15,6 @@ use crate::ifaces::test_cow;
 use crate::ifaces::test_cow::*;
 use crate::ready_event::ReadyEvent;
 
-mod ifaces;
 mod ready_event;
 
 fn router(ready_event: Arc<ReadyEvent>) {
@@ -50,7 +46,8 @@ fn server(ready_event: Arc<ReadyEvent>) {
         .register_iface(
             cow_test_iface_get_def(),
             Some(Box::new(test_cow::ServerDispatch::new(test_iface))),
-        ).expect("register_iface failed");
+        )
+        .expect("register_iface failed");
 
     let peer = Client::new(&rpc, "tcp://127.0.0.1:12346")
         .timeout(Duration::from_secs(5))
@@ -62,7 +59,7 @@ fn server(ready_event: Arc<ReadyEvent>) {
     peer.identify_sync("server", CowRpcIdentityType::UPN, Duration::from_secs(5), None)
         .expect("Identify failed");
 
-    ready_event.set();        
+    ready_event.set();
 
     let _ = peer.wait_thread_to_finish();
 

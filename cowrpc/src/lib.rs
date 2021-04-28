@@ -25,22 +25,20 @@ extern crate tokio;
 //extern crate tokio_tcp;
 //extern crate tungstenite;
 
+use async_trait::async_trait;
+use futures::channel::oneshot::Sender as AsyncSender;
+use futures::Future;
 use std::io::prelude::*;
 use std::sync::Arc;
-use async_trait::async_trait;
-use futures::Future;
-use futures::channel::oneshot::Sender as AsyncSender;
 //TODO FD REMOVE
 //use mio::{Events, Poll, PollOpt, Ready, Token};
 //use mio_extras::channel::Sender;
-use futures::channel::oneshot::Sender;
-use tokio::sync::RwLock;
+pub use crate::proto::{CowRpcMessage, Message};
 pub use crate::transport::r#async::CowFuture;
 pub use crate::transport::tls::{TlsOptions, TlsOptionsBuilder};
-pub use crate::proto::CowRpcMessage;
-pub use crate::proto::Message;
-pub use crate::transport::CowRpcMessageInterceptor;
-pub use crate::transport::MessageInjector as CowRpcMessageInjector;
+pub use crate::transport::{CowRpcMessageInterceptor, MessageInjector as CowRpcMessageInjector};
+use futures::channel::oneshot::Sender;
+use tokio::sync::RwLock;
 
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 //use crate::peer::*;

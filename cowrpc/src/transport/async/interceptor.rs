@@ -1,15 +1,14 @@
 use crate::error::{CowRpcError, Result};
-use futures::prelude::*;
 use crate::proto::CowRpcMessage;
-use std::{net::SocketAddr, time::Duration};
+use crate::transport::r#async::{CowFuture, CowSink, CowStreamEx, Transport};
 use crate::transport::uri::Uri;
-use crate::transport::{
-    r#async::{Transport, CowFuture, CowSink, CowStreamEx},
-    MessageInterceptor, TransportError
-};
+use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
-use std::task::{Context, Poll};
+use futures::prelude::*;
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::Duration;
 
 pub struct InterceptorTransport {
     pub inter: Box<dyn MessageInterceptor>,
@@ -82,7 +81,8 @@ impl Sink<CowRpcMessage> for InterceptorSink {
                 "Unable to send msg {} trought interceptor, peer {} is inside this router",
                 msg.get_msg_name(),
                 msg.get_dst_id()
-            )).into())
+            ))
+            .into())
         } else {
             Ok(())
         }

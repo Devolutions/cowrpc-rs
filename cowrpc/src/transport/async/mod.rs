@@ -1,24 +1,24 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use futures::prelude::*;
 use futures::future::err;
+use futures::prelude::*;
 
 use super::*;
 use crate::error::CowRpcError;
-use crate::CowRpcMessage;
+use crate::transport::r#async::tcp::TcpTransport;
 use crate::transport::tls::TlsOptions;
+use crate::CowRpcMessage;
 use async_trait::async_trait;
 use tokio::stream::StreamExt;
-use crate::transport::r#async::tcp::TcpTransport;
 
 mod tcp;
 mod tcp_listener;
 // TODO FD
 // mod websocket;
 // mod websocket_listener;
-mod interceptor;
 pub mod adaptor;
+mod interceptor;
 
 pub type CowFuture<T> = Box<dyn Future<Output = Result<T>> + Unpin + Send>;
 pub type CowStream<T> = Box<dyn Stream<Item = Result<T>> + Unpin + Send>;
@@ -64,7 +64,9 @@ impl ListenerBuilder {
     }
 
     pub fn from_uri(uri: &str) -> Result<Self> {
-        let uri: Uri = uri.parse().map_err(|parse_error: crate::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
+        let uri: Uri = uri
+            .parse()
+            .map_err(|parse_error: crate::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
 
         let needs_tls;
 
@@ -86,14 +88,14 @@ impl ListenerBuilder {
                 (443, SupportedProto::WebSocket)
             }
             Some(scheme) => {
-                return Err(CowRpcError::Transport(TransportError::InvalidProtocol(
-                    String::from(scheme),
-                )));
+                return Err(CowRpcError::Transport(TransportError::InvalidProtocol(String::from(
+                    scheme,
+                ))));
             }
             None => {
-                return Err(CowRpcError::Transport(TransportError::InvalidProtocol(
-                    String::from("No protocol specified"),
-                )));
+                return Err(CowRpcError::Transport(TransportError::InvalidProtocol(String::from(
+                    "No protocol specified",
+                ))));
             }
         };
 
@@ -101,9 +103,7 @@ impl ListenerBuilder {
             if let Ok(addrs) = uri.get_addrs() {
                 addrs[0]
             } else {
-                return Err(TransportError::InvalidUrl(String::from(
-                    "No local ipAddr specified",
-                )).into());
+                return Err(TransportError::InvalidUrl(String::from("No local ipAddr specified")).into());
             }
         };
 
@@ -144,28 +144,36 @@ impl ListenerBuilder {
 
     pub async fn build(self) -> Result<CowRpcListener> {
         if self.needs_tls && self.tls_options.is_none() {
-            return Err(CowRpcError::Internal("Unable to build listener, the configuration loaded needed tls options but none where given".to_string()));
+            return Err(CowRpcError::Internal(
+                "Unable to build listener, the configuration loaded needed tls options but none where given"
+                    .to_string(),
+            ));
         }
 
         let interface = match self.interface {
             Some(ref i) => i,
-            None => return Err(CowRpcError::Internal("Unable to build listener, socket addr".to_string())),
+            None => {
+                return Err(CowRpcError::Internal(
+                    "Unable to build listener, socket addr".to_string(),
+                ))
+            }
         };
 
         let mut listener = match self.proto {
-            Some(SupportedProto::Tcp) => {
-                tcp_listener::TcpListener::bind(interface).await.map(|l| CowRpcListener::Tcp(l))?
-            }
+            Some(SupportedProto::Tcp) => tcp_listener::TcpListener::bind(interface)
+                .await
+                .map(|l| CowRpcListener::Tcp(l))?,
             Some(SupportedProto::WebSocket) => {
                 // TODO
                 todo!()
                 // websocket_listener::WebSocketListener::bind(interface).map(|l| CowRpcListener::WebSocket(l))?
             }
             _ => {
-                return Err(CowRpcError::Internal("Unable to build listener, missing protocol".to_string()));
+                return Err(CowRpcError::Internal(
+                    "Unable to build listener, missing protocol".to_string(),
+                ));
             }
         };
-
 
         if let Some(tls_options) = self.tls_options {
             listener.set_tls_options(tls_options);
@@ -196,20 +204,18 @@ impl CowRpcListener {
                 let incoming = tcp.incoming();
                 Box::new(futures::StreamExt::map(incoming, |result| {
                     let fut = result?;
-                    let cow_fut = Box::new(fut.and_then(|transport| {
-                        future::ok(CowRpcTransport::Tcp(transport))
-                    })) as CowFuture<CowRpcTransport>;
+                    let cow_fut = Box::new(fut.and_then(|transport| future::ok(CowRpcTransport::Tcp(transport))))
+                        as CowFuture<CowRpcTransport>;
                     Ok(cow_fut)
                 })) as CowStream<CowFuture<CowRpcTransport>>
-            }
-            // CowRpcListener::WebSocket(ws) => {
-            //     let fut: CowStream<CowFuture<CowRpcTransport>> = Box::new(ws.incoming().map(|t| {
-            //         let fut: CowFuture<CowRpcTransport> = Box::new(t.map(|t| CowRpcTransport::WebSocket(t)));
-            //         fut
-            //     }));
-            //
-            //     fut
-            // }
+            } // CowRpcListener::WebSocket(ws) => {
+              //     let fut: CowStream<CowFuture<CowRpcTransport>> = Box::new(ws.incoming().map(|t| {
+              //         let fut: CowFuture<CowRpcTransport> = Box::new(t.map(|t| CowRpcTransport::WebSocket(t)));
+              //         fut
+              //     }));
+              //
+              //     fut
+              // }
         }
     }
 
@@ -231,8 +237,8 @@ impl CowRpcListener {
 #[async_trait]
 pub trait Transport {
     async fn connect(uri: Uri) -> Result<Self>
-        where
-            Self: Sized;
+    where
+        Self: Sized;
     fn message_sink(&mut self) -> CowSink<CowRpcMessage>;
     fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage>;
     fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>);
@@ -264,9 +270,9 @@ impl Transport for CowRpcTransport {
     {
         if let Some(scheme) = uri.clone().scheme() {
             match scheme {
-                "tcp" => {
-                    tcp::TcpTransport::connect(uri).await.map(|transport| CowRpcTransport::Tcp(transport))
-                }
+                "tcp" => tcp::TcpTransport::connect(uri)
+                    .await
+                    .map(|transport| CowRpcTransport::Tcp(transport)),
                 // "ws" | "wss" => Box::new(
                 //     websocket::WebSocketTransport::connect(uri)
                 //         .map(|transport| CowRpcTransport::WebSocket(transport)),

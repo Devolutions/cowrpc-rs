@@ -1,8 +1,8 @@
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::error::{CowRpcError, Result};
+use crate::CowRpcIdentityType;
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std;
 use std::io::{Read, Write};
-use crate::CowRpcIdentityType;
 
 pub const _COW_RPC_ERROR_MSG_ID: u8 = 0;
 pub const COW_RPC_HANDSHAKE_MSG_ID: u8 = 1;
@@ -333,9 +333,7 @@ impl Message for CowRpcMessage {
                 reader.read_exact(&mut v)?;
                 Ok(CowRpcMessage::Result(header, msg, v))
             }
-            COW_RPC_TERMINATE_MSG_ID => {
-                Ok(CowRpcMessage::Terminate(header))
-            }
+            COW_RPC_TERMINATE_MSG_ID => Ok(CowRpcMessage::Terminate(header)),
             COW_RPC_VERIFY_MSG_ID => {
                 let msg = CowRpcVerifyMsg::read_from(&mut reader)?;
                 let mut v = vec![0u8; (header.size - u32::from(header.offset)) as usize];
@@ -1064,8 +1062,8 @@ pub struct CowRpcVerifyMsg {
 
 impl Message for CowRpcVerifyMsg {
     fn read_from<R: Read>(reader: &mut R) -> Result<Self>
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         let msg = CowRpcVerifyMsg {
             call_id: reader.read_u32::<LittleEndian>()?,
@@ -1091,8 +1089,8 @@ pub struct CowRpcHttpMsg {
 
 impl Message for CowRpcHttpMsg {
     fn read_from<R: Read>(reader: &mut R) -> Result<Self>
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         let msg = CowRpcHttpMsg {
             call_id: reader.read_u32::<LittleEndian>()?,
@@ -1153,7 +1151,6 @@ fn test_resolve_serialize() {
     assert_eq!(s1, s2);
     assert_eq!(s1.get_size(flag), s2.get_size(flag));
 }
-
 
 #[derive(Cacheable, Debug, PartialEq, Eq, Clone)]
 pub struct CowRpcIdentity {

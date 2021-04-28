@@ -15,7 +15,9 @@ async fn main() {
         .acceptor()
         .unwrap();
     //let (router, _router_handle) = CowRpcRouter::new("wss://router.local:12345", Some(tls_options)).await.expect("new router failed");
-    let (mut router, _router_handle) = CowRpcRouter::new("tcp://localhost:12346", Some(tls_options)).await.expect("new router failed");
+    let (mut router, _router_handle) = CowRpcRouter::new("tcp://localhost:12346", Some(tls_options))
+        .await
+        .expect("new router failed");
 
     router.verify_identity_callback(verify_identity_callback).await;
 
@@ -24,11 +26,12 @@ async fn main() {
     }
 }
 
-fn verify_identity_callback(cow_id: u32, msg: &[u8]) -> BoxFuture<(Vec<u8>, Option<String>)>  {
+fn verify_identity_callback(cow_id: u32, msg: &[u8]) -> BoxFuture<(Vec<u8>, Option<String>)> {
     let req_string = String::from_utf8_lossy(msg).to_string();
-    info!("verify identity request received: cow_id={:#010X} \r\n {}", cow_id, req_string);
+    info!(
+        "verify identity request received: cow_id={:#010X} \r\n {}",
+        cow_id, req_string
+    );
 
-    async move {
-        (b"HTTP/1.1 200 OK\r\n\r\n".to_vec(), Some("server".to_string()))
-    }.boxed()
+    async move { (b"HTTP/1.1 200 OK\r\n\r\n".to_vec(), Some("server".to_string())) }.boxed()
 }

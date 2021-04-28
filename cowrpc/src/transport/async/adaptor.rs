@@ -1,19 +1,18 @@
+use super::*;
 use crate::error::{CowRpcError, Result};
+use crate::proto::CowRpcMessage;
 use futures::prelude::*;
 use futures::task::Waker;
 use parking_lot::Mutex;
-use crate::proto::CowRpcMessage;
 use std::collections::VecDeque;
-use std::sync::Arc;
-use super::*;
-use std::task::{Context, Poll};
 use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 #[derive(Clone)]
 pub struct Adaptor {
     messages: Arc<Mutex<VecDeque<CowRpcMessage>>>,
-    waker: Arc<Mutex<Option<Waker>>>
-    //current_task: Arc<Mutex<Option<Task>>>,
+    waker: Arc<Mutex<Option<Waker>>>, //current_task: Arc<Mutex<Option<Task>>>,
 }
 
 impl Adaptor {

@@ -1,15 +1,13 @@
 use crate::error::CowRpcError;
-use std::net::SocketAddr;
-use crate::transport::{
-    r#async::{Listener, CowFuture, CowStream, tcp::TcpTransport},
-    MessageInterceptor,
-    tls::TlsOptions,
-};
-use tokio::net::TcpListener as TcpTokioListener;
+use crate::transport::r#async::tcp::TcpTransport;
+use crate::transport::r#async::{CowFuture, CowStream, Listener, Transport};
+use crate::transport::tls::TlsOptions;
+use crate::transport::MessageInterceptor;
 use async_trait::async_trait;
-use tokio::stream::StreamExt;
-use crate::transport::r#async::Transport;
 use futures::future;
+use std::net::SocketAddr;
+use tokio::net::TcpListener as TcpTokioListener;
+use tokio::stream::StreamExt;
 
 pub struct TcpListener {
     listener: TcpTokioListener,
@@ -25,15 +23,11 @@ impl Listener for TcpListener {
         Self: Sized,
     {
         match TcpTokioListener::bind(addr).await {
-            Ok(l) => {
-                Ok(TcpListener {
-                    listener: l,
-                    transport_cb_handler: None,
-                })
-            }
-            Err(e) => {
-                Err(e.into())
-            }
+            Ok(l) => Ok(TcpListener {
+                listener: l,
+                transport_cb_handler: None,
+            }),
+            Err(e) => Err(e.into()),
         }
     }
 

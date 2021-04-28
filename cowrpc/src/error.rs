@@ -1,11 +1,9 @@
 //TODO FD REMOVE
 //use mio_extras;
-use mouscache;
-use crate::proto;
 use crate::proto::*;
-use std;
+use crate::{proto, transport};
 use std::fmt;
-use crate::transport;
+use {mouscache, std};
 
 #[derive(Debug)]
 pub enum CowRpcError {

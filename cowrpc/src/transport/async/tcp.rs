@@ -1,26 +1,20 @@
-use byteorder::{LittleEndian, ReadBytesExt};
 use crate::error::CowRpcError;
-use futures::prelude::*;
-use futures::{self, Future};
 use crate::proto::{CowRpcMessage, Message};
-use std::{
-    io::{ErrorKind, Read, Write},
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
-use crate::transport::{
-    r#async::{Transport, CowFuture, CowSink, CowStreamEx, StreamEx},
-    uri::Uri,
-    MessageInterceptor, TransportError,
-};
-use std::task::{Context, Poll};
-use std::pin::Pin;
-use tokio::net::TcpStream;
-use std::io::Error;
-use async_trait::async_trait;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use crate::tokio::io::{AsyncReadExt, AsyncWriteExt};
-use futures::ready;
+use crate::transport::r#async::{CowFuture, CowSink, CowStreamEx, StreamEx, Transport};
+use crate::transport::uri::Uri;
+use crate::transport::{MessageInterceptor, TransportError};
+use async_trait::async_trait;
+use byteorder::{LittleEndian, ReadBytesExt};
+use futures::prelude::*;
+use futures::{self, ready, Future};
+use std::io::{Error, ErrorKind, Read, Write};
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::TcpStream;
 
 pub struct TcpTransport {
     stream: TcpStream,
@@ -168,7 +162,7 @@ impl Stream for CowMessageStream {
         {
             let data_len = this.data_received.len();
             if data_len > 4 {
-                let msg_len = ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize ;//.read_u32::<LittleEndian>()? as usize;
+                let msg_len = ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize; //.read_u32::<LittleEndian>()? as usize;
                 if data_len >= msg_len {
                     let msg;
                     let v: Vec<u8>;
@@ -209,7 +203,8 @@ impl Stream for CowMessageStream {
                     this.data_received.append(&mut buff);
 
                     if data_len > 4 {
-                        let msg_len = ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize;
+                        let msg_len =
+                            ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize;
                         if data_len >= msg_len {
                             let msg;
                             let v: Vec<u8>;

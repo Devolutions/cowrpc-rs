@@ -10,14 +10,14 @@ use crate::proto::CowRpcMessage;
 
 pub mod r#async;
 //pub mod sync;
-mod uri;
 pub mod tls;
+mod uri;
 
 pub use crate::transport::uri::{Uri, UriError};
 
 pub enum SupportedProto {
     Tcp,
-    WebSocket
+    WebSocket,
 }
 
 // pub trait TransportAdapter: Evented {

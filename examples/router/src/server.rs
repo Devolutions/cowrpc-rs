@@ -3,11 +3,11 @@ extern crate env_logger;
 extern crate log;
 extern crate tls_api;
 
-use std::time::Duration;
-use log::{info, error};
 use cowrpc::async_peer::CowRpcPeer;
+use cowrpc::{CallFuture, CowRpcCallContext};
 use futures::future::err;
-use cowrpc::{CowRpcCallContext, CallFuture};
+use log::{error, info};
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
@@ -26,7 +26,10 @@ async fn main() {
     verify_req.push_str(&format!("Den-Pop-Token: {}", "pop_token"));
     verify_req.push_str("\r\n");
 
-    let result = peer_handle.verify_async(verify_req.into_bytes(), Duration::from_secs(10)).await.expect("verify failed");
+    let result = peer_handle
+        .verify_async(verify_req.into_bytes(), Duration::from_secs(10))
+        .await
+        .expect("verify failed");
     info!("Verify returned: {}", std::str::from_utf8(&result).unwrap());
 
     if let Ok(Err(e)) = task_handle.await {
@@ -38,7 +41,5 @@ fn on_http_call(ctx: CowRpcCallContext, request: &mut [u8]) -> CallFuture<Vec<u8
     let req_string = String::from_utf8_lossy(request).to_string();
     info!("HTTP call received from {}: \r\n {}", ctx.get_caller_id(), req_string);
 
-    Box::new(
-        futures::future::ok(b"HTTP/1.1 200 OK\r\n\r\n".to_vec())
-    )
+    Box::new(futures::future::ok(b"HTTP/1.1 200 OK\r\n\r\n".to_vec()))
 }
