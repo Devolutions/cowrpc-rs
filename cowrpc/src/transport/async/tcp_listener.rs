@@ -1,6 +1,6 @@
 use crate::error::CowRpcError;
 use crate::transport::r#async::tcp::TcpTransport;
-use crate::transport::r#async::{CowFuture, CowStream, Listener, Transport};
+use crate::transport::r#async::{CowFuture, CowStream, Listener};
 use crate::transport::tls::TlsOptions;
 use crate::transport::MessageInterceptor;
 use async_trait::async_trait;

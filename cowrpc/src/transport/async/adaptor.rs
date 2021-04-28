@@ -1,7 +1,7 @@
 use super::*;
-use crate::error::{CowRpcError, Result};
+use crate::error::Result;
 use crate::proto::CowRpcMessage;
-use futures::prelude::*;
+
 use futures::task::Waker;
 use parking_lot::Mutex;
 use std::collections::VecDeque;

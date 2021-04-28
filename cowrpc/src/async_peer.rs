@@ -1,6 +1,6 @@
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{CowRpcIfaceDef, Message, *};
-use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, StreamEx, Transport};
+use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, Transport};
 use crate::transport::Uri;
 use crate::{
     proto, transport, AsyncServer, CallFuture, CowRpcAsyncBindContext, CowRpcAsyncBindReq, CowRpcAsyncBindRsp,
@@ -12,7 +12,7 @@ use crate::{
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::prelude::*;
 use futures::ready;
-use pin_utils::pin_mut;
+
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::atomic::{self, AtomicUsize};
@@ -1172,7 +1172,7 @@ impl CowRpcAsyncPeer {
         on_unbind: Option<Box<UnbindCallback>>,
         on_http: Option<Box<HttpMsgCallback>>,
     ) -> Self {
-        let mut transport = transport;
+        let transport = transport;
         let (reader_stream, writer_sink) = transport.message_stream_sink();
 
         CowRpcAsyncPeer {
@@ -1250,7 +1250,7 @@ impl Stream for CowRpcAsyncPeer {
     }
 }
 
-async fn client_handshake(mut async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
+async fn client_handshake(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
     let mut header = CowRpcHdr {
         msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
         flags: if async_peer.inner.mode == CowRpcMode::DIRECT {
@@ -1405,13 +1405,13 @@ impl CowRpcPeer {
 
         let mut peer = match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri)).await {
             Ok(Ok(transport)) => {
-                let mut peer = CowRpcAsyncPeer::new(transport, mode, ifaces, on_unbind_callback, on_http_msg_callback);
+                let peer = CowRpcAsyncPeer::new(transport, mode, ifaces, on_unbind_callback, on_http_msg_callback);
                 peer.handshake().await?
             }
             Ok(Err(e)) => {
                 return Err(e);
             }
-            Err(e) => {
+            Err(_e) => {
                 return Err(CowRpcError::Proto(format!("Connection attempt timed out")));
             }
         };

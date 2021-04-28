@@ -5,7 +5,7 @@ extern crate tls_api;
 
 use cowrpc::async_peer::CowRpcPeer;
 use cowrpc::{CallFuture, CowRpcCallContext};
-use futures::future::err;
+
 use log::{error, info};
 use std::time::Duration;
 

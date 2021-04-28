@@ -1,11 +1,10 @@
 use std;
 use std::any::Any;
 use std::fmt;
-use std::net::SocketAddr;
 
 //use mio::{Evented, Poll, PollOpt, Ready, Token};
 
-use crate::error::{CowRpcError, Result};
+use crate::error::Result;
 use crate::proto::CowRpcMessage;
 
 pub mod r#async;

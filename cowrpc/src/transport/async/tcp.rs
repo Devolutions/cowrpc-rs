@@ -1,14 +1,14 @@
 use crate::error::CowRpcError;
 use crate::proto::{CowRpcMessage, Message};
 use crate::tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::transport::r#async::{CowFuture, CowSink, CowStreamEx, StreamEx, Transport};
+use crate::transport::r#async::{CowSink, CowStreamEx, StreamEx, Transport};
 use crate::transport::uri::Uri;
 use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
 use byteorder::{LittleEndian, ReadBytesExt};
 use futures::prelude::*;
-use futures::{self, ready, Future};
-use std::io::{Error, ErrorKind, Read, Write};
+use futures::{self, ready};
+use std::io::{ErrorKind, Read, Write};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -257,7 +257,7 @@ pub struct CowMessageSink {
 impl Sink<CowRpcMessage> for CowMessageSink {
     type Error = CowRpcError;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -294,7 +294,7 @@ impl Sink<CowRpcMessage> for CowMessageSink {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 }

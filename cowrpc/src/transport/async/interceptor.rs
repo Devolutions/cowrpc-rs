@@ -1,6 +1,6 @@
 use crate::error::{CowRpcError, Result};
 use crate::proto::CowRpcMessage;
-use crate::transport::r#async::{CowFuture, CowSink, CowStreamEx, Transport};
+use crate::transport::r#async::{CowSink, CowStreamEx, Transport};
 use crate::transport::uri::Uri;
 use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
@@ -88,15 +88,15 @@ impl Sink<CowRpcMessage> for InterceptorSink {
         }
     }
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
         Poll::Ready(Ok(()))
     }
 }

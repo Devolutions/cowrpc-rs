@@ -1,12 +1,11 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use futures::future::err;
 use futures::prelude::*;
 
 use super::*;
 use crate::error::CowRpcError;
-use crate::transport::r#async::tcp::TcpTransport;
+
 use crate::transport::tls::TlsOptions;
 use crate::CowRpcMessage;
 use async_trait::async_trait;
@@ -200,7 +199,7 @@ impl CowRpcListener {
 
     pub async fn incoming(self) -> CowStream<CowFuture<CowRpcTransport>> {
         match self {
-            CowRpcListener::Tcp(mut tcp) => {
+            CowRpcListener::Tcp(tcp) => {
                 let incoming = tcp.incoming();
                 Box::new(futures::StreamExt::map(incoming, |result| {
                     let fut = result?;

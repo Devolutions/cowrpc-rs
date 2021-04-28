@@ -7,17 +7,16 @@ use crate::transport::tls::TlsOptions;
 use crate::transport::MessageInterceptor;
 use crate::{proto, CowRpcMessageInterceptor};
 use futures::channel::oneshot::{channel, Receiver, Sender};
-use futures::future::{err, ok, BoxFuture, FutureExt, TryFutureExt};
+use futures::future::{BoxFuture, FutureExt, TryFutureExt};
 use futures::prelude::*;
 use futures::stream::StreamExt;
-use futures::{Future, Sink};
+
 use mouscache::{Cache, CacheFunc};
 use parking_lot::RwLock as SyncRwLock;
 use std::collections::HashMap;
-use std::fmt;
-use std::pin::Pin;
+
 use std::sync::Arc;
-use std::task::{Context, Poll};
+
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use {mouscache, rand, std};
@@ -195,9 +194,9 @@ impl CowRpcRouter {
             listener_builder = listener_builder.with_ssl(tls);
         }
 
-        let mut listener = listener_builder.build().await?;
+        let listener = listener_builder.build().await?;
 
-        let mut router_shared_clone = shared.clone();
+        let router_shared_clone = shared.clone();
         tokio::spawn(adaptor.message_stream().for_each(move |msg| {
             let mut router = router_shared_clone.clone();
             async move {
@@ -211,14 +210,14 @@ impl CowRpcRouter {
             tokio::spawn(peers_are_alive_task(shared.inner.peer_senders.clone(), task_info));
         }
 
-        let mut router_shared_clone = shared.clone();
+        let router_shared_clone = shared.clone();
         let incoming = listener.incoming().await;
         incoming
             .for_each(move |transport| {
                 let router = router_shared_clone.clone();
                 tokio::spawn(async move {
                     match transport {
-                        Ok(mut transport) => {
+                        Ok(transport) => {
                             if let Ok(mut transport) = transport.await {
                                 transport.set_keep_alive_interval(keep_alive_interval.clone());
 
@@ -1124,14 +1123,14 @@ impl CowRpcRouterPeer {
         transport: CowRpcTransport,
         router: RouterShared,
     ) -> Result<(CowRpcRouterPeer, CowRpcRouterPeerSender)> {
-        let mut transport = transport;
+        let transport = transport;
         let remote_addr = transport.remote_addr();
         let (mut reader_stream, writer_sink) = transport.message_stream_sink();
         let (peer, peer_sender) = match reader_stream.next().await {
             Some(msg) => match msg? {
                 CowRpcMessage::Handshake(hdr, msg) => {
                     if !hdr.is_response() {
-                        let mut flag: u16 = CowRpcErrorCode::Success.into();
+                        let flag: u16 = CowRpcErrorCode::Success.into();
 
                         if hdr.flags & COW_RPC_FLAG_DIRECT != 0 {
                             unimplemented!("Direct mode is not implemented")
@@ -1248,7 +1247,7 @@ impl CowRpcRouterPeer {
         Ok(())
     }
 
-    async fn process_register_req(&mut self, _: CowRpcHdr, msg: CowRpcRegisterMsg) -> Result<()> {
+    async fn process_register_req(&mut self, _: CowRpcHdr, _msg: CowRpcRegisterMsg) -> Result<()> {
         // Register is not supported, verify has to be used.
         let flag = CowRpcErrorCode::NotImplemented;
         self.send_register_rsp(flag.into(), Vec::new()).await?;

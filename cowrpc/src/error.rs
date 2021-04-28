@@ -1,7 +1,7 @@
 //TODO FD REMOVE
 //use mio_extras;
 use crate::proto::*;
-use crate::{proto, transport};
+use crate::transport;
 use std::fmt;
 use {mouscache, std};
 
