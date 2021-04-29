@@ -146,7 +146,6 @@ impl CowRpcRouter {
                 cow_id: 0,
                 state: RwLock::new(CowRpcRouterPeerState::Connected),
                 writer_sink: Mutex::new(CowRpcTransport::from_interceptor(interceptor.clone_boxed()).message_sink()),
-                binds: RouterBindCollection::new(0, self.shared.inner.cache.get_raw_cache().clone()),
             }),
         };
         *self.shared.inner.multi_router_peer.write().await = Some(peer);
@@ -338,7 +337,7 @@ impl RouterShared {
     where
         F: FnOnce(Option<&CowRpcRouterPeerSender>) -> BoxFuture<'_, U>,
     {
-        // TODO
+        // TODO: We could wrap the guard in a struct and use it.
         let reader = self.inner.peer_senders.read().await;
         let sender_opt = reader
             .iter()
@@ -346,12 +345,6 @@ impl RouterShared {
             .map(|(_, peer_s)| peer_s);
 
         let res = and_then(sender_opt).await;
-
-        //TODO Is it still needed ?
-        // sender_opt.and_then(|sender| {
-        //     let _ = sender.inner.writer_sink.lock().await.poll_complete();
-        //     Some(())
-        // });
 
         res
     }
@@ -362,68 +355,13 @@ impl RouterShared {
             peers.remove(&peer_id)
         };
 
-        //Remove the peer and unbind all bind context between this peer and others
         match peer {
-            Some(ref peer_ref) => {
+            Some(_) => {
                 if let Some(ref callback) = &*self.inner.on_peer_disconnection_callback.read().await {
                     callback(peer_id, peer_identity.clone()).await;
                 }
 
                 self.clean_identity(peer_id, peer_identity);
-
-                if let Ok(binds) = peer_ref.inner.binds.get_all() {
-                    for (client_id, server_id, iface_id) in binds {
-                        if let Ok(true) =
-                            peer_ref
-                                .inner
-                                .binds
-                                .update(client_id, server_id, iface_id, CowRpcBindState::Unbinding)
-                        {
-                            let remote_id = if client_id == peer_ref.inner.cow_id {
-                                server_id
-                            } else {
-                                client_id
-                            };
-                            let mut peers = self.inner.peer_senders.write().await;
-                            if let Some(remote_ref) = peers.get_mut(&remote_id) {
-                                let _ = remote_ref.send_unbind_req(client_id, server_id, iface_id).await;
-                            } else {
-                                if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
-                                    // Send Unbind req
-                                    let iface_def = CowRpcIfaceDef {
-                                        id: iface_id,
-                                        flags: COW_RPC_DEF_FLAG_EMPTY,
-                                        ..Default::default()
-                                    };
-
-                                    let iface_defs = vec![iface_def];
-
-                                    let remote_is_server = server_id == remote_id;
-                                    let src_id = if remote_is_server { client_id } else { server_id };
-
-                                    let mut header = CowRpcHdr {
-                                        msg_type: proto::COW_RPC_UNBIND_MSG_ID,
-                                        flags: if !remote_is_server { COW_RPC_FLAG_SERVER } else { 0 },
-                                        src_id,
-                                        dst_id: remote_id,
-                                        ..Default::default()
-                                    };
-
-                                    let msg = CowRpcUnbindMsg { ifaces: iface_defs };
-
-                                    header.size = header.get_size() + msg.get_size();
-                                    header.offset = header.get_size() as u8;
-
-                                    let _ = router_sender.send_messages(CowRpcMessage::Unbind(header, msg));
-                                } else {
-                                    warn!("No peer found with cow id {}", remote_id);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                peer_ref.clear_bind_contexts();
 
                 {
                     if let Err(e) = self.inner.cache.get_raw_cache().set_rem(ALLOCATED_COW_ID_SET, peer_id) {
@@ -443,159 +381,8 @@ impl RouterShared {
     }
 
     async fn process_msg(&mut self, msg: CowRpcMessage) {
-        match msg.clone() {
-            CowRpcMessage::Bind(hdr, msg) => {
-                if !hdr.is_response() {
-                    self.process_bind_req(hdr, msg);
-                } else {
-                    self.process_bind_rsp(hdr, msg).await;
-                }
-            }
-            CowRpcMessage::Unbind(hdr, msg) => {
-                if !hdr.is_response() {
-                    self.process_unbind_req(hdr, msg).await;
-                } else {
-                    self.process_unbind_rsp(hdr, msg).await;
-                }
-            }
-            _ => {}
-        }
-
         // Forward message to the right peer
         self.forward_msg(msg).await;
-    }
-
-    fn process_bind_req(&mut self, _header: CowRpcHdr, _msg: CowRpcBindMsg) {
-        trace!("received bind request")
-    }
-
-    async fn process_bind_rsp(&mut self, header: CowRpcHdr, msg: CowRpcBindMsg) {
-        for iface in msg.ifaces {
-            let client_id = header.dst_id;
-            let server_id = header.src_id;
-            let iface_id = iface.id;
-
-            let local_peer_id = header.dst_id;
-
-            let mut success = false;
-
-            if header.is_failure() || iface.is_failure() {
-                if let CowRpcErrorCode::AlreadyBound = CowRpcErrorCode::from(iface.flags) {
-                    success = true;
-                } else {
-                    self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Failure)
-                        .await;
-                    self.remove_bind(local_peer_id, client_id, server_id, iface_id).await;
-                }
-            } else {
-                success = true;
-            }
-
-            if success {
-                self.find_sender_and_then(header.dst_id, |peer_sender_opt| {
-                    Box::pin(async move {
-                        if let Some(sender) = peer_sender_opt {
-                            sender.add_bind(client_id, server_id, iface_id);
-                            sender.add_remote_bind(header.src_id, client_id, server_id, iface_id);
-                        }
-                    })
-                })
-                .await;
-            }
-        }
-    }
-
-    async fn process_unbind_req(&mut self, header: CowRpcHdr, msg: CowRpcUnbindMsg) {
-        for iface in msg.ifaces {
-            let client_id;
-            let server_id;
-            let iface_id = iface.id;
-
-            let local_peer_id = header.dst_id;
-
-            if header.from_server() {
-                client_id = header.dst_id;
-                server_id = header.src_id;
-            } else {
-                client_id = header.src_id;
-                server_id = header.dst_id;
-            }
-
-            if header.is_failure() || iface.is_failure() {
-                self.remove_bind(local_peer_id, client_id, server_id, iface_id).await;
-            }
-        }
-    }
-
-    async fn process_unbind_rsp(&mut self, header: CowRpcHdr, msg: CowRpcUnbindMsg) {
-        for iface in msg.ifaces {
-            let client_id;
-            let server_id;
-            let iface_id = iface.id;
-
-            let local_peer_id = header.dst_id;
-
-            if header.from_server() {
-                client_id = header.src_id;
-                server_id = header.dst_id;
-            } else {
-                client_id = header.dst_id;
-                server_id = header.src_id;
-            }
-
-            if iface.is_failure() || header.is_failure() {
-                self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Failure)
-                    .await;
-            } else {
-                self.update_bind(local_peer_id, client_id, server_id, iface_id, CowRpcBindState::Unbound)
-                    .await;
-            }
-
-            self.remove_bind(local_peer_id, client_id, server_id, iface_id).await;
-        }
-    }
-
-    async fn update_bind(
-        &mut self,
-        local_peer_id: u32,
-        client_id: u32,
-        server_id: u32,
-        iface_id: u16,
-        new_state: CowRpcBindState,
-    ) {
-        // Update the bind state
-        self.find_sender_and_then(local_peer_id, |sender_opt| {
-            Box::pin(async move {
-                if let Some(sender) = sender_opt {
-                    sender.update_bind_state(client_id, server_id, iface_id, new_state);
-                    let remote_id = if local_peer_id == client_id {
-                        server_id
-                    } else {
-                        client_id
-                    };
-                    sender.update_remote_bind_state(remote_id, client_id, server_id, iface_id, new_state);
-                }
-            })
-        })
-        .await;
-    }
-
-    async fn remove_bind(&mut self, local_peer_id: u32, client_id: u32, server_id: u32, iface_id: u16) {
-        // Remove the bind
-        self.find_sender_and_then(local_peer_id, |sender_opt| {
-            Box::pin(async move {
-                if let Some(sender) = sender_opt {
-                    sender.remove_bind(client_id, server_id, iface_id);
-                    let remote_id = if local_peer_id == client_id {
-                        server_id
-                    } else {
-                        client_id
-                    };
-                    sender.remove_remote_bind(remote_id, client_id, server_id, iface_id);
-                }
-            })
-        })
-        .await;
     }
 
     async fn forward_msg(&mut self, msg: CowRpcMessage) {
@@ -632,8 +419,6 @@ impl RouterShared {
                 })
                 .await
             {
-                return;
-            } else if msg.is_unbind() {
                 return;
             }
         }
@@ -684,46 +469,6 @@ impl RouterShared {
                         .await;
                     }
                 }
-            }
-        } else {
-            match msg.clone() {
-                CowRpcMessage::Bind(hdr, msg) => {
-                    let src_id = hdr.src_id;
-
-                    for iface in msg.ifaces {
-                        if (src_id & 0xFFFF_0000) != self.inner.id {
-                            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
-                                // Send Unbind req
-                                let iface_defs = vec![iface];
-
-                                let mut header = CowRpcHdr {
-                                    msg_type: proto::COW_RPC_UNBIND_MSG_ID,
-                                    flags: 0,
-                                    src_id: hdr.dst_id,
-                                    dst_id: hdr.src_id,
-                                    ..Default::default()
-                                };
-
-                                let msg = CowRpcUnbindMsg { ifaces: iface_defs };
-
-                                header.size = header.get_size() + msg.get_size();
-                                header.offset = header.get_size() as u8;
-
-                                let _ = router_sender.send_messages(CowRpcMessage::Unbind(header, msg));
-                            }
-                        } else {
-                            self.find_sender_and_then(dst_id, |sender_opt| {
-                                Box::pin(async move {
-                                    if let Some(sender_ref) = sender_opt {
-                                        let _ = sender_ref.send_unbind_req(hdr.dst_id, hdr.src_id, iface.id).await;
-                                    }
-                                })
-                            })
-                            .await;
-                        }
-                    }
-                }
-                _ => {}
             }
         }
     }
@@ -846,7 +591,6 @@ pub struct CowRpcRouterPeerSharedInner {
     cow_id: u32,
     state: RwLock<CowRpcRouterPeerState>,
     writer_sink: Mutex<CowSink<CowRpcMessage>>,
-    binds: RouterBindCollection,
 }
 
 pub struct CowRpcRouterPeer {
@@ -876,178 +620,10 @@ impl CowRpcRouterPeerSender {
         *self.inner.state.write().await = CowRpcRouterPeerState::Error;
     }
 
-    async fn send_unbind_req(&self, client_id: u32, server_id: u32, iface_id: u16) -> Result<()> {
-        let iface_def = CowRpcIfaceDef {
-            id: iface_id,
-            flags: COW_RPC_DEF_FLAG_EMPTY,
-            ..Default::default()
-        };
-
-        let iface_defs = vec![iface_def];
-        let cow_id = self.inner.cow_id;
-
-        let remote_is_server = server_id == cow_id;
-        let src_id = if remote_is_server { client_id } else { server_id };
-
-        let mut header = CowRpcHdr {
-            msg_type: proto::COW_RPC_UNBIND_MSG_ID,
-            flags: if !remote_is_server { COW_RPC_FLAG_SERVER } else { 0 },
-            src_id,
-            dst_id: cow_id,
-            ..Default::default()
-        };
-
-        let msg = CowRpcUnbindMsg { ifaces: iface_defs };
-
-        header.size = header.get_size() + msg.get_size();
-        header.offset = header.get_size() as u8;
-
-        self.send_messages(CowRpcMessage::Unbind(header, msg)).await
-    }
-
     async fn send_messages(&self, msg: CowRpcMessage) -> Result<()> {
         self.inner.writer_sink.lock().await.send(msg).await
-        //self.inner.writer_sink.lock().start_send(msg).map(|_| ())
-    }
-
-    fn add_remote_bind(&self, remote_id: u32, client_id: u32, server_id: u32, iface_id: u16) {
-        if self
-            .inner
-            .binds
-            .contains_peer_bind(remote_id, client_id, server_id, iface_id)
-        {
-            return;
-        }
-
-        if let Err(e) = self
-            .inner
-            .binds
-            .add_peer_bind(remote_id, client_id, server_id, iface_id)
-        {
-            error!("BindCollection returned error: {:?}", e);
-        }
-    }
-
-    fn remove_remote_bind(&self, remote_id: u32, client_id: u32, server_id: u32, iface_id: u16) {
-        if let Err(e) = self
-            .inner
-            .binds
-            .remove_peer_bind(remote_id, client_id, server_id, iface_id)
-        {
-            error!("BindCollection returned error: {:?}", e);
-        }
-    }
-
-    fn update_remote_bind_state(
-        &self,
-        remote_id: u32,
-        client_id: u32,
-        server_id: u32,
-        iface_id: u16,
-        new_state: CowRpcBindState,
-    ) {
-        if let Err(e) = self
-            .inner
-            .binds
-            .update_peer_bind(remote_id, client_id, server_id, iface_id, new_state)
-        {
-            match new_state {
-                CowRpcBindState::Unbinding | CowRpcBindState::Unbound => {}
-                _ => error!("BindCollection returned error: {:?}", e),
-            };
-        }
-    }
-
-    fn add_bind(&self, client_id: u32, server_id: u32, iface_id: u16) {
-        if self.inner.binds.contains(client_id, server_id, iface_id) {
-            return;
-        }
-
-        if let Err(e) = self.inner.binds.add(client_id, server_id, iface_id) {
-            error!("BindCollection returned error: {:?}", e);
-        }
-    }
-
-    fn remove_bind(&self, client_id: u32, server_id: u32, iface_id: u16) {
-        if let Err(e) = self.inner.binds.remove(client_id, server_id, iface_id) {
-            error!("BindCollection returned error: {:?}", e);
-        }
-    }
-
-    fn update_bind_state(&self, client_id: u32, server_id: u32, iface_id: u16, new_state: CowRpcBindState) {
-        if let Err(e) = self.inner.binds.update(client_id, server_id, iface_id, new_state) {
-            match new_state {
-                CowRpcBindState::Unbinding | CowRpcBindState::Unbound => {}
-                _ => error!("BindCollection returned error: {:?}", e),
-            };
-        }
-    }
-
-    fn clear_bind_contexts(&self) {
-        let cow_id = self.inner.cow_id;
-
-        match self.inner.binds.get_all() {
-            Ok(binds) => {
-                for (client_id, server_id, iface_id) in binds {
-                    self.remove_bind(client_id, server_id, iface_id);
-                    let remote_id = if cow_id == client_id { server_id } else { client_id };
-                    self.remove_remote_bind(remote_id, client_id, server_id, iface_id);
-                }
-            }
-            Err(e) => {
-                error!("Unable to clear bind contexts. Got error: {:?}", e);
-            }
-        }
     }
 }
-
-// impl Future for CowRpcRouterPeer {
-//     type Output = std::result::Result<(u32, Option<CowRpcIdentity>), (u32, Option<CowRpcIdentity>, CowRpcError)>;
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         loop {
-//
-//             let res = {
-//                 let mut lock = self.reader_stream.lock();
-//                 lock.poll_unpin(cx)
-//             };
-//             match *res {
-//                 Poll::Ready(Ok(Some(msg))) => {
-//                     let peer = self.clone();
-//                     self.process_msg_fut = Some(CowRpcRouterPeer::process_msg(peer, msg));
-//                     self.poll().map_err(|(_, _, e)| (self.inner.cow_id, self.identity.read().clone(), e))?;
-//                 }
-//                 Poll::Pending => {
-//                     break; // nothing to do with that
-//                 }
-//                 Poll::Ready(Ok(None)) => {
-//                     return Poll::Ready(Ok((self.inner.cow_id, self.identity.read().clone()))); // means the transport is disconnected
-//                 }
-//                 Poll::Ready(Err(e)) => {
-//                     return Poll::Ready(Err((self.inner.cow_id, self.identity.read().clone(), e)));
-//                 }
-//             }
-//         }
-//
-//         {
-//             match &*self.inner.state.read() {
-//                 CowRpcRouterPeerState::Error => {
-//                     return Poll::Ready(Err((
-//                         self.inner.cow_id,
-//                         self.identity.read().clone(),
-//                         CowRpcError::Internal("An error occured while polling the peer connection".to_string()),
-//                     )));
-//                 }
-//                 CowRpcRouterPeerState::Terminated => {
-//                     return Poll::Ready(Ok((self.inner.cow_id, self.identity.read().clone())));
-//                 }
-//                 _ => {}
-//             }
-//         }
-//
-//         Poll::Pending
-//     }
-// }
 
 fn generate_peer_id(router: &RouterShared) -> u32 {
     loop {
@@ -1132,12 +708,10 @@ impl CowRpcRouterPeer {
 
                             let (mut peer, peer_sender) = {
                                 let router = router.clone();
-                                let cache_clone = router.inner.cache.get_raw_cache().clone();
                                 let peer_id = generate_peer_id(&router);
                                 let inner = Arc::new(CowRpcRouterPeerSharedInner {
                                     cow_id: peer_id,
                                     writer_sink: Mutex::new(writer_sink),
-                                    binds: RouterBindCollection::new(peer_id, cache_clone),
                                     state: RwLock::new(CowRpcRouterPeerState::Connected),
                                 });
 
@@ -1471,246 +1045,6 @@ impl CowRpcRouterPeer {
     async fn send_messages(&mut self, msg: CowRpcMessage) -> Result<()> {
         self.inner.writer_sink.lock().await.send(msg).await
         // self.inner.writer_sink.lock().start_send(msg).map(|_| ())
-    }
-}
-
-struct RouterBindCollection {
-    pub peer_id: u32,
-    cache: Cache,
-}
-
-impl RouterBindCollection {
-    const COW_RPC_BIND_CONTEXT_SET: &'static str = "rpc_bind_context";
-    const COW_RPC_BIND_STATE_HASHSET: &'static str = "rpc_bind_state";
-
-    pub fn new(id: u32, cache: Cache) -> Self {
-        RouterBindCollection {
-            peer_id: id,
-            cache: cache.clone(),
-        }
-    }
-
-    pub fn get_all(&self) -> Result<Vec<(u32, u32, u16)>> {
-        self.get_all_peer_binds(self.peer_id)
-    }
-
-    pub fn contains(&self, client_id: u32, server_id: u32, iface_id: u16) -> bool {
-        self.contains_peer_bind(self.peer_id, client_id, server_id, iface_id)
-    }
-
-    pub fn add(&self, client_id: u32, server_id: u32, iface_id: u16) -> Result<()> {
-        self.add_peer_bind(self.peer_id, client_id, server_id, iface_id)
-    }
-
-    pub fn update(&self, client_id: u32, server_id: u32, iface_id: u16, new_state: CowRpcBindState) -> Result<bool> {
-        self.update_peer_bind(self.peer_id, client_id, server_id, iface_id, new_state)
-    }
-
-    pub fn remove(&self, client_id: u32, server_id: u32, iface_id: u16) -> Result<()> {
-        self.remove_peer_bind(self.peer_id, client_id, server_id, iface_id)
-    }
-
-    pub fn get_all_peer_binds(&self, peer_id: u32) -> Result<Vec<(u32, u32, u16)>> {
-        let vec = self
-            .cache
-            .set_members(&Self::cow_rpc_bind_context_set_key(peer_id))?
-            .iter()
-            .filter_map(|s| Self::read_key(&s))
-            .collect::<Vec<_>>();
-        Ok(vec)
-    }
-
-    pub fn contains_peer_bind(&self, peer_id: u32, client_id: u32, server_id: u32, iface_id: u16) -> bool {
-        let bind_key = Self::create_key(client_id, server_id, iface_id);
-        if let Ok(ismember) = self
-            .cache
-            .set_ismember(&Self::cow_rpc_bind_context_set_key(peer_id), bind_key)
-        {
-            ismember
-        } else {
-            false
-        }
-    }
-
-    pub fn add_peer_bind(&self, peer_id: u32, client_id: u32, server_id: u32, iface_id: u16) -> Result<()> {
-        let bind_key = Self::create_key(client_id, server_id, iface_id);
-        if self
-            .cache
-            .set_ismember(&Self::cow_rpc_bind_context_set_key(peer_id), bind_key.clone())?
-        {
-            return Err(CowRpcError::CowRpcFailure(CowRpcErrorCode::AlreadyBound));
-        }
-
-        self.cache
-            .set_add(&Self::cow_rpc_bind_context_set_key(peer_id), &[bind_key.clone()])?;
-        self.cache.hash_set(
-            &Self::cow_rpc_bind_state_hashset_key(peer_id),
-            &bind_key,
-            CowRpcBindState::Bound.get_name(),
-        )?;
-
-        Ok(())
-    }
-
-    pub fn update_peer_bind(
-        &self,
-        peer_id: u32,
-        client_id: u32,
-        server_id: u32,
-        iface_id: u16,
-        new_state: CowRpcBindState,
-    ) -> Result<bool> {
-        let bind_key = Self::create_key(client_id, server_id, iface_id);
-        if let Some(current_state) = self
-            .cache
-            .hash_get::<String>(&Self::cow_rpc_bind_state_hashset_key(peer_id), &bind_key)?
-        {
-            let current_state = CowRpcBindState::from_name(&current_state);
-            if current_state == new_state {
-                return Ok(true);
-            }
-
-            let mut success = false;
-            match new_state {
-                CowRpcBindState::Initial => {
-                    if current_state == CowRpcBindState::Initial {
-                        success = true;
-                    }
-                }
-                CowRpcBindState::Binding => {
-                    if current_state == CowRpcBindState::Initial || current_state == CowRpcBindState::Binding {
-                        success = true;
-                    }
-                }
-                CowRpcBindState::Bound => {
-                    if current_state == CowRpcBindState::Binding || current_state == CowRpcBindState::Bound {
-                        success = true;
-                    }
-                }
-                CowRpcBindState::Unbinding => {
-                    if current_state == CowRpcBindState::Binding
-                        || current_state == CowRpcBindState::Bound
-                        || current_state == CowRpcBindState::Unbinding
-                    {
-                        success = true;
-                    }
-                }
-                CowRpcBindState::Unbound => {
-                    if current_state == CowRpcBindState::Bound
-                        || current_state == CowRpcBindState::Unbinding
-                        || current_state == CowRpcBindState::Unbound
-                    {
-                        success = true;
-                    }
-                }
-                CowRpcBindState::Failure => {
-                    success = true;
-                }
-            }
-
-            if success {
-                debug!(
-                    "BindCtx Transition: {} -> {} (clientId={} - serverId={} - ifaceId={})",
-                    current_state.get_name(),
-                    new_state.get_name(),
-                    client_id,
-                    server_id,
-                    iface_id
-                );
-                self.cache.hash_set(
-                    &Self::cow_rpc_bind_state_hashset_key(peer_id),
-                    &bind_key,
-                    new_state.get_name(),
-                )?;
-                return Ok(true);
-            } else {
-                debug!("BindCtx Transition failed. State has not been changed: {} -> {} (clientId={} - serverId={} - ifaceId={})", current_state.get_name(), new_state.get_name(), client_id, server_id, iface_id);
-            }
-        }
-
-        Ok(false)
-    }
-
-    pub fn remove_peer_bind(&self, peer_id: u32, client_id: u32, server_id: u32, iface_id: u16) -> Result<()> {
-        let bind_key = Self::create_key(client_id, server_id, iface_id);
-
-        if !self
-            .cache
-            .set_ismember(&Self::cow_rpc_bind_context_set_key(peer_id), bind_key.clone())?
-        {
-            return Ok(());
-        }
-
-        self.cache
-            .set_rem(&Self::cow_rpc_bind_context_set_key(peer_id), bind_key.clone())?;
-        self.cache
-            .hash_delete(&Self::cow_rpc_bind_state_hashset_key(peer_id), &[bind_key.as_ref()])?;
-
-        Ok(())
-    }
-
-    fn create_key(client_id: u32, server_id: u32, iface_id: u16) -> String {
-        format!("{}:{}:{}", client_id, server_id, iface_id)
-    }
-
-    fn read_key(key: &str) -> Option<(u32, u32, u16)> {
-        let bind_info = key.split(':').collect::<Vec<_>>();
-        if bind_info.len() == 3 {
-            let src_id: u32 = bind_info[0].parse().unwrap_or(0);
-            let dst_id: u32 = bind_info[1].parse().unwrap_or(0);
-            let iface_id: u16 = bind_info[2].parse().unwrap_or(0);
-
-            if src_id != 0 && dst_id != 0 && iface_id != 0 {
-                return Some((src_id, dst_id, iface_id));
-            }
-        }
-
-        None
-    }
-
-    #[inline]
-    fn cow_rpc_bind_context_set_key(peer_id: u32) -> String {
-        format!("{}{}", Self::COW_RPC_BIND_CONTEXT_SET, peer_id)
-    }
-
-    #[inline]
-    fn cow_rpc_bind_state_hashset_key(peer_id: u32) -> String {
-        format!("{}{}", Self::COW_RPC_BIND_STATE_HASHSET, peer_id)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum CowRpcBindState {
-    Initial,
-    Binding,
-    Bound,
-    Unbinding,
-    Unbound,
-    Failure,
-}
-
-impl CowRpcBindState {
-    fn get_name(&self) -> &str {
-        match self {
-            CowRpcBindState::Initial => "Initial",
-            CowRpcBindState::Binding => "Binding",
-            CowRpcBindState::Bound => "Bound",
-            CowRpcBindState::Unbinding => "Unbinding",
-            CowRpcBindState::Unbound => "Unbound",
-            CowRpcBindState::Failure => "Failure",
-        }
-    }
-
-    fn from_name(name: &str) -> Self {
-        match name {
-            "Initial" => CowRpcBindState::Initial,
-            "Binding" => CowRpcBindState::Binding,
-            "Bound" => CowRpcBindState::Bound,
-            "Unbinding" => CowRpcBindState::Unbinding,
-            "Unbound" => CowRpcBindState::Unbound,
-            "Failure" => CowRpcBindState::Failure,
-            _ => CowRpcBindState::Failure,
-        }
     }
 }
 
