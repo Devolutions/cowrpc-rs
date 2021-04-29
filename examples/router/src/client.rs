@@ -11,20 +11,17 @@ use std::time::Duration;
 async fn main() {
     env_logger::init();
 
-    let (peer, peer_handle) = CowRpcPeer::new("tcp://127.0.0.1:12346", None);
+    let mut peer = CowRpcPeer::new("tcp://127.0.0.1:12346", None);
 
-    let task_handle = tokio::spawn(peer.run());
+    peer.start().await.expect("Peer start failed");
 
-    // TODO : Find a way to remove that
-    std::thread::sleep(Duration::from_secs(2));
-
-    let server_id = peer_handle
+    let server_id = peer
         .resolve_async("server", Duration::from_secs(10))
         .await
         .expect("resolve failed");
     info!("server cow_id = {:#010X}", server_id);
 
-    let server_name = peer_handle
+    let server_name = peer
         .resolve_reverse_async(server_id, Duration::from_secs(10))
         .await
         .expect("reverse resolve failed");
@@ -33,14 +30,12 @@ async fn main() {
     let mut http_req = format!("GET {} HTTP/1.1 \r\n", "/");
     http_req.push_str("\r\n");
 
-    let http_response = peer_handle
+    let http_response = peer
         .call_http_async_v2(server_id, http_req.into_bytes(), Duration::from_secs(10))
         .await
         .expect("call_http failed");
     let http_response = String::from_utf8_lossy(&http_response).to_string();
     info!("http_response received: {}", http_response);
 
-    if let Ok(Err(e)) = task_handle.await {
-        error!("Client stopped with error: {}", e);
-    }
+    peer.stop().await.expect()
 }

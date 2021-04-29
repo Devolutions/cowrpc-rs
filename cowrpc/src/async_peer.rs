@@ -2,8 +2,8 @@ use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
 use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, Transport};
 use crate::transport::Uri;
-use crate::{proto, transport, CallFuture, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq, CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext, CowRpcIdentityType, CowRpcState};
-use futures::channel::oneshot::{channel, Receiver, Sender};
+use crate::{proto, transport, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq, CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext, CowRpcIdentityType, CowRpcState};
+use futures::channel::oneshot::{channel};
 use futures::prelude::*;
 use futures::ready;
 
@@ -13,24 +13,252 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
+use std::str::FromStr;
+use tokio::task::JoinHandle;
 
-type HandleMonitor = Arc<Mutex<Option<PeerHandle>>>;
-type HandleMsgProcessor = Arc<RwLock<Option<CowRpcPeerAsyncMsgProcessor>>>;
-type HandleThreadHandle = Arc<Mutex<Option<std::thread::JoinHandle<Result<()>>>>>;
+pub type CallFuture<T> = Box<dyn Future<Output = std::result::Result<T, ()>> + Unpin + Send>;
 type HttpMsgCallback = dyn Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>> + Send + Sync;
-pub type PeerMonitor = Receiver<()>;
-
-pub struct PeerHandle {
-    sender: Sender<()>,
-}
-
-impl PeerHandle {
-    pub fn exit(self) {
-        let _ = self.sender.send(());
-    }
-}
 
 static COWRPC_REQ_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
+
+pub struct CowRpcPeer {
+    url: String,
+    connection_timeout: Option<Duration>,
+    msg_processor: Option<CowRpcPeerAsyncMsgProcessor>,
+    on_http_msg_callback: Option<Box<HttpMsgCallback>>,
+    msg_processing_task: Option<JoinHandle<Result<()>>>,
+}
+
+impl CowRpcPeer {
+    pub fn new(url: &str, connection_timeout: Option<Duration>) -> Self
+    {
+        CowRpcPeer {
+            url: url.to_string(),
+            connection_timeout,
+            msg_processor: None,
+            on_http_msg_callback: None,
+            msg_processing_task: None,
+        }
+    }
+
+    pub fn on_http_msg_callback<F: 'static + Send + Sync + Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>>>(
+        &mut self,
+        callback: F,
+    ) {
+        self.on_http_msg_callback = Some(Box::new(callback));
+    }
+
+    pub async fn start(&mut self) -> Result<()> {
+        let connection_timeout = self.connection_timeout.unwrap_or_else(|| Duration::from_secs(30));
+
+        let uri = Uri::from_str(&self.url).map_err(|e| CowRpcError::Internal(e.to_string()))?;
+
+        let mut peer = match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri)).await {
+            Ok(connect_result) => {
+                let transport = connect_result?;
+                let mut peer = CowRpcAsyncPeer::new(transport, self.on_http_msg_callback.take());
+                peer.handshake().await?;
+                peer
+            }
+            Err(_) => {
+                return Err(CowRpcError::Proto(format!("Connection attempt timed out")));
+            }
+        };
+
+        let msg_processor = peer.message_processor();
+        self.msg_processor = Some(msg_processor.clone());
+
+        let msg_processing_task = tokio::spawn(
+            async move {
+                loop {
+                    match futures::StreamExt::next(&mut peer).await {
+                        Some(Ok(msg)) => {
+                            let msg_processor_clone = msg_processor.clone();
+                            tokio::spawn(async move {
+                                match msg_processor_clone.process_message(msg).await {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        error!("Msg processor got an error : {:?}", e);
+                                    }
+                                }
+                                future::ready(())
+                            });
+                        }
+                        Some(Err(e)) => {
+                            error!("Peer msg stream failed with error : {:?}", e);
+                            return Err(e);
+                        }
+                        None => {
+                            // clean disconnection
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        );
+
+        self.msg_processing_task = Some(msg_processing_task);
+
+        Ok(())
+    }
+
+    pub async fn stop(&mut self) -> Result<()> {
+        if let Some(inner) = &self.msg_processor {
+            inner.send_terminate_req().await?;
+        }
+
+        if let Some(handle) = self.msg_processing_task.take() {
+            if let Ok(res) = handle.await {
+                res?;
+            };
+        }
+
+        Ok(())
+    }
+
+    pub async fn verify_async(&self, payload: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+        if let Some(inner) = &self.msg_processor {
+            let (tx, rx) = channel();
+            let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+            let req = CowRpcAsyncReq::Verify(CowRpcAsyncVerifyReq {
+                id,
+                call_id: id as u32,
+                tx: Some(tx),
+            });
+
+            let inner_clone = inner.clone();
+
+            inner.add_request(req).await?;
+            inner_clone.send_verify_req(id as u32, payload).await?;
+            let result = tokio::time::timeout(timeout, rx)
+                .await
+                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
+            match result {
+                Ok(res) => Ok(res.payload),
+                Err(e) => Err(CowRpcError::Internal(format!(
+                    "The receiver has been cancelled, {:?}",
+                    e
+                ))),
+            }
+        } else {
+            Err(CowRpcError::Internal(
+                "Calling CowRpcPeerHandle::identify_async before CowRpcPeer::run will have no effect".to_string(),
+            ))
+        }
+    }
+
+    pub async fn call_http_async_v2(&self, remote_id: u32, http_req: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
+        if let Some(inner) = &self.msg_processor {
+            let (tx, rx) = channel();
+            let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+            let req = CowRpcAsyncReq::Http(CowRpcAsyncHttpReq {
+                id,
+                call_id: id as u32,
+                tx: Some(tx),
+            });
+
+            let inner_clone = inner.clone();
+
+            inner.add_request(req).await?;
+            inner_clone.send_http_req(remote_id, id as u32, http_req).await?;
+            let result = tokio::time::timeout(timeout, rx)
+                .await
+                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
+            match result {
+                Ok(res) => {
+                    if res._error == CowRpcErrorCode::Success {
+                        Ok(res.http_rsp)
+                    } else {
+                        Err(CowRpcError::CowRpcFailure(res._error))
+                    }
+                }
+                Err(e) => Err(CowRpcError::Internal(format!(
+                    "The receiver has been cancelled, {:?}",
+                    e
+                ))),
+            }
+        } else {
+            Err(CowRpcError::Internal(
+                "Calling CowRpcPeerHandle::identify_async before CowRpcPeer::run will have no effect".to_string(),
+            ))
+        }
+    }
+
+    pub async fn resolve_async(&self, name: &str, timeout: Duration) -> Result<u32> {
+        if let Some(inner) = &self.msg_processor {
+            let (tx, rx) = channel();
+            let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+            let req = CowRpcAsyncReq::Resolve(CowRpcAsyncResolveReq {
+                id,
+                node_id: None,
+                name: Some(name.to_string()),
+                reverse: false,
+                tx: Some(tx),
+            });
+
+            let name = name.to_string();
+
+            let inner_clone = inner.clone();
+
+            inner.add_request(req).await?;
+            inner_clone.send_resolve_req(None, Some(&name), false).await?;
+            let result = tokio::time::timeout(timeout, rx)
+                .await
+                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
+            match result {
+                Ok(res) => match res.get_result() {
+                    Ok(r) => Ok(r),
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(CowRpcError::Internal(format!(
+                    "The receiver has been cancelled, {:?}",
+                    e
+                ))),
+            }
+        } else {
+            Err(CowRpcError::Internal(
+                "Calling CowRpcPeerHandle::resolve_async before CowRpcPeer::run will have no effect".to_string(),
+            ))
+        }
+    }
+
+    pub async fn resolve_reverse_async(&self, node_id: u32, timeout: Duration) -> Result<String> {
+        if let Some(inner) = &self.msg_processor {
+            let (tx, rx) = channel();
+            let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
+            let req = CowRpcAsyncReq::Resolve(CowRpcAsyncResolveReq {
+                id,
+                node_id: Some(node_id),
+                name: None,
+                reverse: true,
+                tx: Some(tx),
+            });
+
+            let inner_clone = inner.clone();
+
+            inner.add_request(req).await?;
+            inner_clone.send_resolve_req(Some(node_id), None, true).await?;
+            let result = tokio::time::timeout(timeout, rx)
+                .await
+                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
+            match result {
+                Ok(res) => match res.get_reverse_result() {
+                    Ok(r) => Ok(r),
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(CowRpcError::Internal(format!(
+                    "The receiver has been cancelled, {:?}",
+                    e
+                ))),
+            }
+        } else {
+            Err(CowRpcError::Internal(
+                "Calling CowRpcPeerHandle::resolve_reverse_async before CowRpcPeer::run will have no effect"
+                    .to_string(),
+            ))
+        }
+    }
+}
 
 #[derive(Clone)]
 struct CowRpcPeerSharedInner {
@@ -74,7 +302,7 @@ struct CowRpcPeerAsyncMsgProcessor {
 }
 
 impl CowRpcPeerAsyncMsgProcessor {
-    pub async fn process_message(&self, msg: CowRpcMessage) -> Result<()> {
+    async fn process_message(&self, msg: CowRpcMessage) -> Result<()> {
         let is_response = msg.is_response();
 
         match msg {
@@ -519,18 +747,65 @@ impl CowRpcAsyncPeer {
         }
     }
 
-    async fn send_msg(self, msg: CowRpcMessage) -> Result<CowRpcAsyncPeer> {
+    async fn send_msg(&mut self, msg: CowRpcMessage) -> Result<()> {
         {
             let mut writer = self.inner.writer_sink.lock().await;
             writer.send(msg).await?;
         }
 
-        Ok(self)
+        Ok(())
     }
 
-    async fn handshake(self) -> Result<Self> {
+    async fn handshake(&mut self) -> Result<()> {
         self.inner.transition_to_state(CowRpcState::HANDSHAKE).await;
-        client_handshake(self).await
+
+        // Send handshake
+
+        let mut header = CowRpcHdr {
+            msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
+            flags: 0,
+            src_id: 0,
+            dst_id: 0,
+            ..Default::default()
+        };
+
+        let msg = CowRpcHandshakeMsg::default();
+
+        header.size = header.get_size() + msg.get_size();
+        header.offset = header.size as u8;
+
+        self.send_msg(CowRpcMessage::Handshake(header, msg)).await?;
+
+        // Receive handshake response
+
+        let msg: CowRpcMessage = match futures::StreamExt::next(&mut self.reader_stream).await {
+            Some(msg_result) => msg_result?,
+            None => {
+                return Err(CowRpcError::Proto(
+                    "Connection was reset before handshake response".to_string(),
+                ))
+            }
+        };
+
+        match msg {
+            CowRpcMessage::Handshake(header, msg) => {
+                if header.is_response() {
+                    self.process_handshake_rsp(header, msg).await?;
+                } else {
+                    return Err(CowRpcError::Proto(
+                        "Expected Handshake Response, Handshake request".to_string(),
+                    ));
+                }
+            }
+            msg => {
+                return Err(CowRpcError::Proto(format!(
+                    "Expected Handshake Response, got {:?}",
+                    msg
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     async fn process_handshake_rsp(&self, header: CowRpcHdr, _: CowRpcHandshakeMsg) -> Result<()> {
@@ -567,383 +842,6 @@ impl Stream for CowRpcAsyncPeer {
                 return Poll::Ready(None);
             }
             other => return Poll::Ready(other),
-        }
-    }
-}
-
-async fn client_handshake(async_peer: CowRpcAsyncPeer) -> Result<CowRpcAsyncPeer> {
-    let mut header = CowRpcHdr {
-        msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
-        flags: 0,
-        src_id: 0,
-        dst_id: 0,
-        ..Default::default()
-    };
-
-    let msg = CowRpcHandshakeMsg::default();
-
-    header.size = header.get_size() + msg.get_size();
-    header.offset = header.size as u8;
-
-    let mut peer = async_peer.send_msg(CowRpcMessage::Handshake(header, msg)).await?;
-
-    let msg: CowRpcMessage = match futures::StreamExt::next(&mut peer.reader_stream).await {
-        Some(msg_result) => msg_result?,
-        None => {
-            return Err(CowRpcError::Proto(
-                "Connection was reset before handshake response".to_string(),
-            ))
-        }
-    };
-
-    match msg {
-        CowRpcMessage::Handshake(header, msg) => {
-            if header.is_response() {
-                peer.process_handshake_rsp(header, msg).await?;
-            } else {
-                return Err(CowRpcError::Proto(
-                    "Expected Handshake Response, Handshake request".to_string(),
-                ));
-            }
-        }
-        msg => {
-            return Err(CowRpcError::Proto(format!(
-                "Expected Handshake Response, got {:?}",
-                msg
-            )));
-        }
-    }
-
-    Ok(peer)
-}
-
-pub struct CowRpcPeer {
-    url: String,
-    connection_timeout: Option<Duration>,
-    #[allow(dead_code)]
-    monitor: PeerMonitor,
-    peer_handle_inner: HandleMsgProcessor,
-    #[allow(dead_code)]
-    thread_handle: HandleThreadHandle,
-    on_http_msg_callback: Option<Box<HttpMsgCallback>>,
-}
-
-impl CowRpcPeer {
-    pub fn new(url: &str, connection_timeout: Option<Duration>) -> (CowRpcPeer, CowRpcPeerHandle) {
-        let (handle, monitor) = channel();
-        let peer_handle_inner = Arc::new(RwLock::new(None));
-        let thread_handle = Arc::new(Mutex::new(None));
-
-        let peer_handle = PeerHandle { sender: handle };
-
-        (
-            CowRpcPeer {
-                url: url.to_string(),
-                connection_timeout,
-                monitor,
-                peer_handle_inner: peer_handle_inner.clone(),
-                thread_handle: thread_handle.clone(),
-                on_http_msg_callback: None,
-            },
-            CowRpcPeerHandle {
-                monitor: Arc::new(Mutex::new(Some(peer_handle))),
-                peer: peer_handle_inner,
-                thread_handle,
-            },
-        )
-    }
-
-    pub async fn run(self) -> Result<()> {
-        use std::str::FromStr;
-
-        let CowRpcPeer {
-            url,
-            connection_timeout,
-            monitor: _,
-            peer_handle_inner,
-            thread_handle: _,
-            on_http_msg_callback,
-        } = self;
-
-        let connection_timeout = connection_timeout.unwrap_or_else(|| Duration::from_secs(30));
-
-        let uri = match Uri::from_str(&url).map_err(|e| CowRpcError::Internal(e.to_string())) {
-            Ok(u) => u,
-            Err(e) => return Err(e.into()),
-        };
-
-        let mut peer = match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri)).await {
-            Ok(Ok(transport)) => {
-                let peer = CowRpcAsyncPeer::new(transport, on_http_msg_callback);
-                peer.handshake().await?
-            }
-            Ok(Err(e)) => {
-                return Err(e);
-            }
-            Err(_e) => {
-                return Err(CowRpcError::Proto(format!("Connection attempt timed out")));
-            }
-        };
-
-        let msg_processor = peer.message_processor();
-
-        *peer_handle_inner.write().await = Some(msg_processor.clone());
-
-        loop {
-            match futures::StreamExt::next(&mut peer).await {
-                Some(Ok(msg)) => {
-                    let msg_processor_clone = msg_processor.clone();
-                    tokio::spawn(async move {
-                        match msg_processor_clone.process_message(msg).await {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("Msg processor got an error : {:?}", e);
-                            }
-                        }
-                        future::ready(())
-                    });
-                }
-                Some(Err(e)) => {
-                    error!("Peer msg stream failed with error : {:?}", e);
-                    return Err(e);
-                }
-                None => {
-                    // clean disconnection
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    pub fn on_http_msg_callback<F: 'static + Send + Sync + Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>>>(
-        &mut self,
-        callback: F,
-    ) {
-        self.on_http_msg_callback = Some(Box::new(callback));
-    }
-}
-
-#[derive(Clone)]
-pub struct CowRpcPeerHandle {
-    monitor: HandleMonitor,
-    peer: HandleMsgProcessor,
-    thread_handle: HandleThreadHandle,
-}
-
-impl CowRpcPeerHandle {
-    async fn inner(&self) -> Option<CowRpcPeerAsyncMsgProcessor> {
-        self.peer.read().await.clone()
-    }
-
-    pub async fn shutdown(&self) -> Result<()> {
-        self.monitor
-            .lock()
-            .await
-            .take()
-            .expect("A CowRpcPeerHandle cannot exist without a monitor, can't exit twice")
-            .exit();
-
-        if let Some(handle) = self.thread_handle.lock().await.take() {
-            return handle
-                .join()
-                .map_err(|_| CowRpcError::Internal("Unable to stop CowRpcPeer thread".to_string()))?;
-        }
-
-        Ok(())
-    }
-
-    pub async fn exit(&self) -> Result<()> {
-        let inner = self.inner().await;
-
-        let self_clone = self.clone();
-
-        if let Some(inner) = inner {
-            inner.send_terminate_req().await?;
-            self_clone
-                .monitor
-                .lock()
-                .await
-                .take()
-                .expect("A CowRpcPeerHandle cannot exist without a monitor, can't exit twice")
-                .exit();
-
-            let mut t_handle = self_clone.thread_handle.lock().await;
-
-            if let Some(handle) = t_handle.take() {
-                if let Err(e) = handle
-                    .join()
-                    .map_err(|_| CowRpcError::Internal("Unable to stop CowRpcPeer thread".to_string()))
-                {
-                    Err(e.into())
-                } else {
-                    Ok(())
-                }
-            } else {
-                Ok(())
-            }
-        } else {
-            self.monitor
-                .lock()
-                .await
-                .take()
-                .expect("A CowRpcPeerHandle cannot exist without a monitor, can't exit twice")
-                .exit();
-
-            if let Some(handle) = self.thread_handle.lock().await.take() {
-                if let Err(e) = handle
-                    .join()
-                    .map_err(|_| CowRpcError::Internal("Unable to stop CowRpcPeer thread".to_string()))
-                {
-                    Err(e.into())
-                } else {
-                    Ok(())
-                }
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    pub async fn verify_async(&self, payload: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
-        if let Some(inner) = self.inner().await {
-            let (tx, rx) = channel();
-            let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-            let req = CowRpcAsyncReq::Verify(CowRpcAsyncVerifyReq {
-                id,
-                call_id: id as u32,
-                tx: Some(tx),
-            });
-
-            let inner_clone = inner.clone();
-
-            inner.add_request(req).await?;
-            inner_clone.send_verify_req(id as u32, payload).await?;
-            let result = tokio::time::timeout(timeout, rx)
-                .await
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
-            match result {
-                Ok(res) => Ok(res.payload),
-                Err(e) => Err(CowRpcError::Internal(format!(
-                    "The receiver has been cancelled, {:?}",
-                    e
-                ))),
-            }
-        } else {
-            Err(CowRpcError::Internal(
-                "Calling CowRpcPeerHandle::identify_async before CowRpcPeer::run will have no effect".to_string(),
-            ))
-        }
-    }
-
-    pub async fn call_http_async_v2(&self, remote_id: u32, http_req: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
-        if let Some(inner) = self.inner().await {
-            let (tx, rx) = channel();
-            let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-            let req = CowRpcAsyncReq::Http(CowRpcAsyncHttpReq {
-                id,
-                call_id: id as u32,
-                tx: Some(tx),
-            });
-
-            let inner_clone = inner.clone();
-
-            inner.add_request(req).await?;
-            inner_clone.send_http_req(remote_id, id as u32, http_req).await?;
-            let result = tokio::time::timeout(timeout, rx)
-                .await
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
-            match result {
-                Ok(res) => {
-                    if res._error == CowRpcErrorCode::Success {
-                        Ok(res.http_rsp)
-                    } else {
-                        Err(CowRpcError::CowRpcFailure(res._error))
-                    }
-                }
-                Err(e) => Err(CowRpcError::Internal(format!(
-                    "The receiver has been cancelled, {:?}",
-                    e
-                ))),
-            }
-        } else {
-            Err(CowRpcError::Internal(
-                "Calling CowRpcPeerHandle::identify_async before CowRpcPeer::run will have no effect".to_string(),
-            ))
-        }
-    }
-
-    pub async fn resolve_async(&self, name: &str, timeout: Duration) -> Result<u32> {
-        if let Some(inner) = self.inner().await {
-            let (tx, rx) = channel();
-            let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-            let req = CowRpcAsyncReq::Resolve(CowRpcAsyncResolveReq {
-                id,
-                node_id: None,
-                name: Some(name.to_string()),
-                reverse: false,
-                tx: Some(tx),
-            });
-
-            let name = name.to_string();
-
-            let inner_clone = inner.clone();
-
-            inner.add_request(req).await?;
-            inner_clone.send_resolve_req(None, Some(&name), false).await?;
-            let result = tokio::time::timeout(timeout, rx)
-                .await
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
-            match result {
-                Ok(res) => match res.get_result() {
-                    Ok(r) => Ok(r),
-                    Err(e) => Err(e),
-                },
-                Err(e) => Err(CowRpcError::Internal(format!(
-                    "The receiver has been cancelled, {:?}",
-                    e
-                ))),
-            }
-        } else {
-            Err(CowRpcError::Internal(
-                "Calling CowRpcPeerHandle::resolve_async before CowRpcPeer::run will have no effect".to_string(),
-            ))
-        }
-    }
-
-    pub async fn resolve_reverse_async(&self, node_id: u32, timeout: Duration) -> Result<String> {
-        if let Some(inner) = self.inner().await {
-            let (tx, rx) = channel();
-            let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);
-            let req = CowRpcAsyncReq::Resolve(CowRpcAsyncResolveReq {
-                id,
-                node_id: Some(node_id),
-                name: None,
-                reverse: true,
-                tx: Some(tx),
-            });
-
-            let inner_clone = inner.clone();
-
-            inner.add_request(req).await?;
-            inner_clone.send_resolve_req(Some(node_id), None, true).await?;
-            let result = tokio::time::timeout(timeout, rx)
-                .await
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
-            match result {
-                Ok(res) => match res.get_reverse_result() {
-                    Ok(r) => Ok(r),
-                    Err(e) => Err(e),
-                },
-                Err(e) => Err(CowRpcError::Internal(format!(
-                    "The receiver has been cancelled, {:?}",
-                    e
-                ))),
-            }
-        } else {
-            Err(CowRpcError::Internal(
-                "Calling CowRpcPeerHandle::resolve_reverse_async before CowRpcPeer::run will have no effect"
-                    .to_string(),
-            ))
         }
     }
 }

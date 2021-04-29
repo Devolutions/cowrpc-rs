@@ -3,38 +3,33 @@ extern crate env_logger;
 extern crate log;
 extern crate tls_api;
 
-use cowrpc::async_peer::CowRpcPeer;
-use cowrpc::{CallFuture, CowRpcCallContext};
+use cowrpc::async_peer::{CowRpcPeer, CallFuture};
+use cowrpc::{CowRpcCallContext};
 
-use log::{error, info};
+use log::{info};
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
 
-    let (mut peer, peer_handle) = CowRpcPeer::new("tcp://127.0.0.1:12346", None);
+    let mut peer = CowRpcPeer::new("tcp://127.0.0.1:12346", None);
 
     peer.on_http_msg_callback(on_http_call);
-    let task_handle = tokio::spawn(peer.run());
-
-    // TODO : REMOVE THAT
-    std::thread::sleep(Duration::from_secs(2));
+    peer.start().await.expect("peer can't start");
 
     let mut verify_req = format!("GET {} HTTP/1.1 \r\n", "/");
     verify_req.push_str(&format!("Den_ID: {} \r\n", "server"));
     verify_req.push_str(&format!("Den-Pop-Token: {}", "pop_token"));
     verify_req.push_str("\r\n");
 
-    let result = peer_handle
+    let result = peer
         .verify_async(verify_req.into_bytes(), Duration::from_secs(10))
         .await
         .expect("verify failed");
     info!("Verify returned: {}", std::str::from_utf8(&result).unwrap());
 
-    if let Ok(Err(e)) = task_handle.await {
-        error!("Server stopped with error: {}", e);
-    }
+    peer.stop().await.expect("Peer stop failed");
 }
 
 fn on_http_call(ctx: CowRpcCallContext, request: &mut [u8]) -> CallFuture<Vec<u8>> {

@@ -26,7 +26,6 @@ extern crate tokio;
 //extern crate tungstenite;
 
 use futures::channel::oneshot::Sender as AsyncSender;
-use futures::Future;
 //TODO FD REMOVE
 //use mio::{Events, Poll, PollOpt, Ready, Token};
 //use mio_extras::channel::Sender;
@@ -44,8 +43,6 @@ mod proto;
 pub mod transport;
 
 // const NEW_CONNECTION: Token = Token(1);
-
-pub type CallFuture<T> = Box<dyn Future<Output = std::result::Result<T, ()>> + Unpin + Send>;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcRole {
