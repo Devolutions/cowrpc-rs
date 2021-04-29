@@ -2,11 +2,7 @@ use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
 use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, Transport};
 use crate::transport::Uri;
-use crate::{
-    proto, transport, CallFuture, CowRpcAsyncBindContext, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq,
-    CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext,
-    CowRpcIdentityType, CowRpcParams, CowRpcState,
-};
+use crate::{proto, transport, CallFuture, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq, CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext, CowRpcIdentityType, CowRpcState};
 use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::prelude::*;
 use futures::ready;
@@ -125,7 +121,7 @@ impl CowRpcPeerAsyncMsgProcessor {
 
             CowRpcMessage::Call(header, msg, _payload) if !is_response => {
                 // Call are deprecated, we send back an error
-                self.send_result_rsp(header.src_id, msg, None, CowRpcErrorCode::NotImplemented.into())
+                self.send_failure_result_rsp(header.src_id, msg, CowRpcErrorCode::NotImplemented.into())
                     .await
             }
 
@@ -321,11 +317,10 @@ impl CowRpcPeerAsyncMsgProcessor {
         self.send_terminate_rsp(header.src_id).await
     }
 
-    async fn send_result_rsp(
+    async fn send_failure_result_rsp(
         &self,
         dst_id: u32,
         call_msg: CowRpcCallMsg,
-        output_param: Option<Box<dyn CowRpcParams>>,
         flags: u16,
     ) -> Result<()> {
         let mut header = CowRpcHdr {
@@ -342,25 +337,10 @@ impl CowRpcPeerAsyncMsgProcessor {
             proc_id: call_msg.proc_id,
         };
 
-        if let Some(call_result) = output_param {
-            let result_size = match call_result.get_size() {
-                Ok(size) => size,
-                Err(e) => return Err(e.into()),
-            };
-            header.size = header.get_size() + msg.get_size() + result_size;
-            header.offset = (header.get_size() + msg.get_size()) as u8;
+        header.size = header.get_size() + msg.get_size();
+        header.offset = header.size as u8;
 
-            let mut payload = Vec::new();
-            if let Err(e) = call_result.write_to(&mut payload) {
-                return Err(e.into());
-            }
-            self.send_message(CowRpcMessage::Result(header, msg, payload)).await
-        } else {
-            header.size = header.get_size() + msg.get_size();
-            header.offset = header.size as u8;
-
-            self.send_message(CowRpcMessage::Result(header, msg, Vec::new())).await
-        }
+        self.send_message(CowRpcMessage::Result(header, msg, Vec::new())).await
     }
 
     async fn send_http_req(&self, dst_id: u32, call_id: u32, http_msg: Vec<u8>) -> Result<()> {
@@ -890,15 +870,6 @@ impl CowRpcPeerHandle {
                 "Calling CowRpcPeerHandle::identify_async before CowRpcPeer::run will have no effect".to_string(),
             ))
         }
-    }
-
-    pub async fn call_http_async(
-        &self,
-        bind_context: Arc<CowRpcAsyncBindContext>,
-        http_req: Vec<u8>,
-        timeout: Duration,
-    ) -> Result<Vec<u8>> {
-        self.call_http_async_v2(bind_context.remote_id, http_req, timeout).await
     }
 
     pub async fn resolve_async(&self, name: &str, timeout: Duration) -> Result<u32> {

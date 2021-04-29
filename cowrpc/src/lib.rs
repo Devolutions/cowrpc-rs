@@ -25,11 +25,8 @@ extern crate tokio;
 //extern crate tokio_tcp;
 //extern crate tungstenite;
 
-use async_trait::async_trait;
 use futures::channel::oneshot::Sender as AsyncSender;
 use futures::Future;
-use std::io::prelude::*;
-use std::sync::Arc;
 //TODO FD REMOVE
 //use mio::{Events, Poll, PollOpt, Ready, Token};
 //use mio_extras::channel::Sender;
@@ -37,7 +34,6 @@ pub use crate::proto::{CowRpcMessage, Message};
 pub use crate::transport::r#async::CowFuture;
 pub use crate::transport::tls::{TlsOptions, TlsOptionsBuilder};
 pub use crate::transport::{CowRpcMessageInterceptor, MessageInjector as CowRpcMessageInjector};
-use tokio::sync::RwLock;
 
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 
@@ -162,94 +158,6 @@ impl CowRpcAsyncReq {
     }
 }
 
-/// An RPC interface.
-///
-/// In comparison with the `CowRpcIfaceReg` type, this type contains the mapping of local and network ids.
-pub struct CowRpcIface {
-    pub name: String,
-    pub lid: u16,
-    pub rid: u16,
-    pub procs: Vec<CowRpcProc>,
-    pub server: Option<Box<dyn Server>>,
-}
-
-impl CowRpcIface {
-    pub fn get_proc(&self, proc_id: u16, is_local_id: bool) -> Option<&CowRpcProc> {
-        for procedure in &self.procs {
-            if (is_local_id && proc_id == procedure.lid) || (!is_local_id && proc_id == procedure.rid) {
-                return Some(&procedure);
-            }
-        }
-        None
-    }
-
-    pub fn set_server(&mut self, server: Option<Box<dyn Server>>) {
-        self.server = server
-    }
-}
-
-pub struct CowRpcAsyncIface {
-    pub name: String,
-    pub lid: u16,
-    pub rid: u16,
-    pub procs: Vec<CowRpcProc>,
-    pub server: Option<Box<dyn AsyncServer>>,
-}
-
-impl CowRpcAsyncIface {
-    pub fn get_proc(&self, proc_id: u16, is_local_id: bool) -> Option<&CowRpcProc> {
-        for procedure in &self.procs {
-            if (is_local_id && proc_id == procedure.lid) || (!is_local_id && proc_id == procedure.rid) {
-                return Some(&procedure);
-            }
-        }
-        None
-    }
-
-    pub fn set_server(&mut self, server: Option<Box<dyn AsyncServer>>) {
-        self.server = server
-    }
-}
-
-#[async_trait]
-trait Iface {
-    async fn get_remote_id(&self) -> u16;
-    async fn get_local_id(&self) -> u16;
-}
-
-#[async_trait]
-impl Iface for Arc<RwLock<CowRpcIface>> {
-    async fn get_remote_id(&self) -> u16 {
-        let iface = self.read().await;
-        iface.rid
-    }
-
-    async fn get_local_id(&self) -> u16 {
-        let iface = self.read().await;
-        iface.lid
-    }
-}
-
-#[async_trait]
-impl Iface for Arc<RwLock<CowRpcAsyncIface>> {
-    async fn get_remote_id(&self) -> u16 {
-        let iface = self.read().await;
-        return iface.rid;
-    }
-
-    async fn get_local_id(&self) -> u16 {
-        let iface = self.read().await;
-        return iface.lid;
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct CowRpcProc {
-    pub name: String,
-    pub lid: u16,
-    pub rid: u16,
-}
-
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CowRpcIdentityType {
     /// Anonymous identity
@@ -305,71 +213,6 @@ impl CowRpcIdentityType {
     }
 }
 
-pub struct CowRpcAsyncBindContext {
-    pub is_server: bool,
-    pub remote_id: u32,
-    pub iface: Arc<RwLock<CowRpcAsyncIface>>,
-}
-
-impl CowRpcAsyncBindContext {
-    pub fn new(is_server: bool, remote_id: u32, iface: &Arc<RwLock<CowRpcAsyncIface>>) -> Arc<CowRpcAsyncBindContext> {
-        Arc::new(CowRpcAsyncBindContext {
-            is_server,
-            remote_id,
-            iface: iface.clone(),
-        })
-    }
-
-    pub async fn get_iface_remote_id(&self) -> u16 {
-        return self.iface.read().await.rid;
-    }
-
-    pub async fn get_proc_remote_id(&self, local_proc_id: u16) -> Option<u16> {
-        let iface = self.iface.read().await;
-        let p_opt = iface.get_proc(local_proc_id, true);
-        if let Some(p) = p_opt {
-            return Some(p.rid);
-        }
-        None
-    }
-}
-
-/// A bind context.
-///
-/// A bind context is needed to send calls to a peer on a specific interface.
-pub struct CowRpcBindContext {
-    /// The local peer acts as the server
-    pub is_server: bool,
-    /// The id of the remote peer
-    pub remote_id: u32,
-    /// The interface
-    pub iface: Arc<RwLock<CowRpcIface>>,
-}
-
-impl CowRpcBindContext {
-    pub fn new(is_server: bool, remote_id: u32, iface: &Arc<RwLock<CowRpcIface>>) -> Arc<CowRpcBindContext> {
-        Arc::new(CowRpcBindContext {
-            is_server,
-            remote_id,
-            iface: iface.clone(),
-        })
-    }
-
-    pub async fn get_iface_remote_id(&self) -> u16 {
-        self.iface.read().await.rid
-    }
-
-    pub async fn get_proc_remote_id(&self, local_proc_id: u16) -> Option<u16> {
-        let iface = self.iface.read().await;
-        let p_opt = iface.get_proc(local_proc_id, true);
-        if let Some(p) = p_opt {
-            Some(p.rid)
-        } else {
-            None
-        }
-    }
-}
-
 /// Provides information about the remote peer when processing a call.
 pub struct CowRpcCallContext {
     caller_id: u32,
@@ -386,49 +229,3 @@ impl CowRpcCallContext {
     }
 }
 
-/// An RPC interface registration.
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct CowRpcIfaceReg {
-    name: &'static str,
-    procs: Vec<CowRpcProcReg>,
-}
-
-impl CowRpcIfaceReg {
-    pub fn new(name: &'static str, procs: Vec<CowRpcProcReg>) -> CowRpcIfaceReg {
-        CowRpcIfaceReg { name, procs }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct CowRpcProcReg {
-    pub name: &'static str,
-    pub id: u16,
-}
-
-impl CowRpcProcReg {
-    pub fn new(name: &'static str, id: u16) -> CowRpcProcReg {
-        CowRpcProcReg { name, id }
-    }
-}
-
-pub trait CowRpcParams: Send + Sync {
-    fn read_from<R: Read>(reader: &mut R) -> Result<Self>
-    where
-        Self: Sized;
-
-    fn write_to(&self, writer: &mut dyn Write) -> Result<()>;
-
-    fn get_size(&self) -> Result<u32> {
-        let mut buffer = Vec::new();
-        self.write_to(&mut buffer)?;
-        Ok(buffer.len() as u32)
-    }
-}
-
-pub trait Server: Send + Sync {
-    fn dispatch_call(&self, caller_id: u32, proc_id: u16, payload: &mut Vec<u8>) -> Result<Box<dyn CowRpcParams>>;
-}
-
-pub trait AsyncServer: Send + Sync {
-    fn dispatch_call(&self, caller_id: u32, proc_id: u16, payload: &mut Vec<u8>) -> CowFuture<Box<dyn CowRpcParams>>;
-}
