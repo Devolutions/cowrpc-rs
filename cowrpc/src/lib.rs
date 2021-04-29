@@ -225,4 +225,3 @@ impl CowRpcCallContext {
         self.caller_id
     }
 }
-

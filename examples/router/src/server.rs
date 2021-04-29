@@ -3,10 +3,10 @@ extern crate env_logger;
 extern crate log;
 extern crate tls_api;
 
-use cowrpc::async_peer::{CowRpcPeer, CallFuture};
-use cowrpc::{CowRpcCallContext};
+use cowrpc::async_peer::{CallFuture, CowRpcPeer};
+use cowrpc::CowRpcCallContext;
 
-use log::{info};
+use log::info;
 use std::time::Duration;
 
 #[tokio::main]

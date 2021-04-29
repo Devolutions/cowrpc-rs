@@ -2,18 +2,22 @@ use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
 use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, Transport};
 use crate::transport::Uri;
-use crate::{proto, transport, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq, CowRpcAsyncResolveReq, CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext, CowRpcIdentityType, CowRpcState};
-use futures::channel::oneshot::{channel};
+use crate::{
+    proto, transport, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq, CowRpcAsyncResolveReq,
+    CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext, CowRpcIdentityType,
+    CowRpcState,
+};
+use futures::channel::oneshot::channel;
 use futures::prelude::*;
 use futures::ready;
 
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::atomic::{self, AtomicUsize};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
-use std::str::FromStr;
 use tokio::task::JoinHandle;
 
 pub type CallFuture<T> = Box<dyn Future<Output = std::result::Result<T, ()>> + Unpin + Send>;
@@ -30,8 +34,7 @@ pub struct CowRpcPeer {
 }
 
 impl CowRpcPeer {
-    pub fn new(url: &str, connection_timeout: Option<Duration>) -> Self
-    {
+    pub fn new(url: &str, connection_timeout: Option<Duration>) -> Self {
         CowRpcPeer {
             url: url.to_string(),
             connection_timeout,
@@ -68,34 +71,32 @@ impl CowRpcPeer {
         let msg_processor = peer.message_processor();
         self.msg_processor = Some(msg_processor.clone());
 
-        let msg_processing_task = tokio::spawn(
-            async move {
-                loop {
-                    match futures::StreamExt::next(&mut peer).await {
-                        Some(Ok(msg)) => {
-                            let msg_processor_clone = msg_processor.clone();
-                            tokio::spawn(async move {
-                                match msg_processor_clone.process_message(msg).await {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        error!("Msg processor got an error : {:?}", e);
-                                    }
+        let msg_processing_task = tokio::spawn(async move {
+            loop {
+                match futures::StreamExt::next(&mut peer).await {
+                    Some(Ok(msg)) => {
+                        let msg_processor_clone = msg_processor.clone();
+                        tokio::spawn(async move {
+                            match msg_processor_clone.process_message(msg).await {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    error!("Msg processor got an error : {:?}", e);
                                 }
-                                future::ready(())
-                            });
-                        }
-                        Some(Err(e)) => {
-                            error!("Peer msg stream failed with error : {:?}", e);
-                            return Err(e);
-                        }
-                        None => {
-                            // clean disconnection
-                            return Ok(());
-                        }
+                            }
+                            future::ready(())
+                        });
+                    }
+                    Some(Err(e)) => {
+                        error!("Peer msg stream failed with error : {:?}", e);
+                        return Err(e);
+                    }
+                    None => {
+                        // clean disconnection
+                        return Ok(());
                     }
                 }
             }
-        );
+        });
 
         self.msg_processing_task = Some(msg_processing_task);
 
@@ -545,12 +546,7 @@ impl CowRpcPeerAsyncMsgProcessor {
         self.send_terminate_rsp(header.src_id).await
     }
 
-    async fn send_failure_result_rsp(
-        &self,
-        dst_id: u32,
-        call_msg: CowRpcCallMsg,
-        flags: u16,
-    ) -> Result<()> {
+    async fn send_failure_result_rsp(&self, dst_id: u32, call_msg: CowRpcCallMsg, flags: u16) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_RESULT_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flags,
