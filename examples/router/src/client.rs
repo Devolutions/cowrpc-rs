@@ -4,7 +4,7 @@ extern crate log;
 extern crate tls_api;
 
 use cowrpc::async_peer::CowRpcPeer;
-use log::{error, info};
+use log::{info};
 use std::time::Duration;
 
 #[tokio::main]
@@ -37,5 +37,5 @@ async fn main() {
     let http_response = String::from_utf8_lossy(&http_response).to_string();
     info!("http_response received: {}", http_response);
 
-    peer.stop().await.expect()
+    peer.stop().await.expect("Peer stop failed");
 }
