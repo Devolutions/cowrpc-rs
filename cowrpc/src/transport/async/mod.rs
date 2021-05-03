@@ -9,21 +9,21 @@ use crate::error::CowRpcError;
 use crate::transport::tls::TlsOptions;
 use crate::CowRpcMessage;
 use async_trait::async_trait;
+use std::pin::Pin;
 
 mod tcp;
 mod tcp_listener;
-// TODO FD
-// mod websocket;
-// mod websocket_listener;
+mod websocket;
+mod websocket_listener;
 pub mod adaptor;
 mod interceptor;
 
-pub type CowFuture<T> = Box<dyn Future<Output = Result<T>> + Unpin + Send>;
-pub type CowStream<T> = Box<dyn Stream<Item = Result<T>> + Unpin + Send>;
-pub type CowSink<T> = Box<dyn Sink<T, Error = CowRpcError> + Unpin + Send>;
+pub type CowFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
+pub type CowStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send>>;
+pub type CowSink<T> = Pin<Box<dyn Sink<T, Error = CowRpcError> + Send>>;
 
-pub type CowStreamEx<T> = Box<dyn StreamEx<Item = Result<T>>>;
-pub trait StreamEx: Stream + Unpin + Sync + Send {
+pub type CowStreamEx<T> = Pin<Box<dyn StreamEx<Item = Result<T>>>>;
+pub trait StreamEx: Stream + Sync + Send + Unpin {
     fn close_on_keep_alive_timeout(&mut self, close: bool);
 }
 
@@ -34,7 +34,7 @@ pub trait Listener {
     async fn bind(addr: &SocketAddr) -> Result<Self>
     where
         Self: Sized;
-    fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>>;
+    async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>>;
     fn set_tls_options(&mut self, tls_opt: TlsOptions);
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
     fn set_executor_handle(&mut self) {
@@ -162,9 +162,7 @@ impl ListenerBuilder {
                 .await
                 .map(|l| CowRpcListener::Tcp(l))?,
             Some(SupportedProto::WebSocket) => {
-                // TODO
-                todo!()
-                // websocket_listener::WebSocketListener::bind(interface).map(|l| CowRpcListener::WebSocket(l))?
+                websocket_listener::WebSocketListener::bind(interface).await.map(|l| CowRpcListener::WebSocket(l))?
             }
             _ => {
                 return Err(CowRpcError::Internal(
@@ -187,8 +185,7 @@ impl ListenerBuilder {
 
 pub enum CowRpcListener {
     Tcp(tcp_listener::TcpListener),
-    //TODO
-    //WebSocket(websocket_listener::WebSocketListener),
+    WebSocket(websocket_listener::WebSocketListener),
 }
 
 impl CowRpcListener {
@@ -199,35 +196,36 @@ impl CowRpcListener {
     pub async fn incoming(self) -> CowStream<CowFuture<CowRpcTransport>> {
         match self {
             CowRpcListener::Tcp(tcp) => {
-                let incoming = tcp.incoming();
-                Box::new(futures::StreamExt::map(incoming, |result| {
+                let incoming = tcp.incoming().await;
+                Box::pin(futures::StreamExt::map(incoming, |result| {
                     let fut = result?;
-                    let cow_fut = Box::new(fut.and_then(|transport| future::ok(CowRpcTransport::Tcp(transport))))
+                    let cow_fut = Box::pin(fut.and_then(|transport| future::ok(CowRpcTransport::Tcp(transport))))
                         as CowFuture<CowRpcTransport>;
                     Ok(cow_fut)
                 })) as CowStream<CowFuture<CowRpcTransport>>
-            } // CowRpcListener::WebSocket(ws) => {
-              //     let fut: CowStream<CowFuture<CowRpcTransport>> = Box::new(ws.incoming().map(|t| {
-              //         let fut: CowFuture<CowRpcTransport> = Box::new(t.map(|t| CowRpcTransport::WebSocket(t)));
-              //         fut
-              //     }));
-              //
-              //     fut
-              // }
+            }
+            CowRpcListener::WebSocket(ws) => {
+                let incoming = ws.incoming().await;
+                Box::pin(futures::StreamExt::map(incoming, |result| {
+                    let fut = result?;
+                    let cow_fut = Box::pin(fut.and_then(|transport| future::ok(CowRpcTransport::WebSocket(transport)))) as CowFuture<CowRpcTransport>;
+                    Ok(cow_fut)
+                })) as CowStream<CowFuture<CowRpcTransport>>
+            }
         }
     }
 
     pub fn set_tls_options(&mut self, tls_opt: TlsOptions) {
         match self {
             CowRpcListener::Tcp(ref mut tcp) => tcp.set_tls_options(tls_opt),
-            // CowRpcListener::WebSocket(ref mut ws) => ws.set_tls_options(tls_opt),
+            CowRpcListener::WebSocket(ref mut ws) => ws.set_tls_options(tls_opt),
         }
     }
 
     pub fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         match self {
             CowRpcListener::Tcp(ref mut tcp) => tcp.set_msg_interceptor(cb_handler),
-            // CowRpcListener::WebSocket(ref mut ws) => ws.set_msg_interceptor(cb_handler),
+            CowRpcListener::WebSocket(ref mut ws) => ws.set_msg_interceptor(cb_handler),
         }
     }
 }
@@ -249,8 +247,7 @@ pub trait Transport {
 
 pub enum CowRpcTransport {
     Tcp(tcp::TcpTransport),
-    //TODO
-    //WebSocket(websocket::WebSocketTransport),
+    WebSocket(websocket::WebSocketTransport),
     Interceptor(interceptor::InterceptorTransport),
 }
 
@@ -271,10 +268,9 @@ impl Transport for CowRpcTransport {
                 "tcp" => tcp::TcpTransport::connect(uri)
                     .await
                     .map(|transport| CowRpcTransport::Tcp(transport)),
-                // "ws" | "wss" => Box::new(
-                //     websocket::WebSocketTransport::connect(uri)
-                //         .map(|transport| CowRpcTransport::WebSocket(transport)),
-                // ),
+                "ws" | "wss" =>
+                    websocket::WebSocketTransport::connect(uri).await
+                        .map(|transport| CowRpcTransport::WebSocket(transport)),
                 _ => Err(TransportError::InvalidUrl("Bad scheme provided".to_string()).into()),
             }
         } else {
@@ -285,7 +281,7 @@ impl Transport for CowRpcTransport {
     fn message_sink(&mut self) -> CowSink<CowRpcMessage> {
         match self {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.message_sink(),
-            // CowRpcTransport::WebSocket(ref mut ws) => ws.message_sink(),
+            CowRpcTransport::WebSocket(ref mut ws) => ws.message_sink(),
             CowRpcTransport::Interceptor(ref mut inter) => inter.message_sink(),
         }
     }
@@ -293,7 +289,7 @@ impl Transport for CowRpcTransport {
     fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage> {
         match self {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.message_stream(),
-            // CowRpcTransport::WebSocket(ref mut ws) => ws.message_stream(),
+            CowRpcTransport::WebSocket(ref mut ws) => ws.message_stream(),
             CowRpcTransport::Interceptor(ref mut inter) => inter.message_stream(),
         }
     }
@@ -301,6 +297,7 @@ impl Transport for CowRpcTransport {
     fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
         match self {
             CowRpcTransport::Tcp(tcp) => tcp.message_stream_sink(),
+            CowRpcTransport::WebSocket(ws) => ws.message_stream_sink(),
             CowRpcTransport::Interceptor(inter) => inter.message_stream_sink(),
         }
     }
@@ -308,7 +305,7 @@ impl Transport for CowRpcTransport {
     fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         match self {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.set_message_interceptor(cb_handler),
-            // CowRpcTransport::WebSocket(ref mut ws) => ws.set_message_interceptor(cb_handler),
+            CowRpcTransport::WebSocket(ref mut ws) => ws.set_message_interceptor(cb_handler),
             CowRpcTransport::Interceptor(ref mut inter) => inter.set_message_interceptor(cb_handler),
         }
     }
@@ -316,7 +313,7 @@ impl Transport for CowRpcTransport {
     fn set_keep_alive_interval(&mut self, interval: Option<Duration>) {
         match self {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.set_keep_alive_interval(interval),
-            // CowRpcTransport::WebSocket(ref mut ws) => ws.set_keep_alive_interval(interval),
+            CowRpcTransport::WebSocket(ref mut ws) => ws.set_keep_alive_interval(interval),
             CowRpcTransport::Interceptor(ref mut inter) => inter.set_keep_alive_interval(interval),
         }
     }
@@ -324,7 +321,7 @@ impl Transport for CowRpcTransport {
     fn local_addr(&self) -> Option<SocketAddr> {
         match self {
             CowRpcTransport::Tcp(ref tcp) => tcp.local_addr(),
-            // CowRpcTransport::WebSocket(ref ws) => ws.local_addr(),
+            CowRpcTransport::WebSocket(ref ws) => ws.local_addr(),
             CowRpcTransport::Interceptor(ref inter) => inter.local_addr(),
         }
     }
@@ -332,7 +329,7 @@ impl Transport for CowRpcTransport {
     fn remote_addr(&self) -> Option<SocketAddr> {
         match self {
             CowRpcTransport::Tcp(ref tcp) => tcp.remote_addr(),
-            // CowRpcTransport::WebSocket(ref ws) => ws.remote_addr(),
+            CowRpcTransport::WebSocket(ref ws) => ws.remote_addr(),
             CowRpcTransport::Interceptor(ref inter) => inter.remote_addr(),
         }
     }
@@ -340,7 +337,7 @@ impl Transport for CowRpcTransport {
     fn up_time(&self) -> Duration {
         match self {
             CowRpcTransport::Tcp(ref tcp) => tcp.up_time(),
-            // CowRpcTransport::WebSocket(ref ws) => ws.up_time(),
+            CowRpcTransport::WebSocket(ref ws) => ws.up_time(),
             CowRpcTransport::Interceptor(ref inter) => inter.up_time(),
         }
     }

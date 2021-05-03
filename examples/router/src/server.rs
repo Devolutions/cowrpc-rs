@@ -13,7 +13,7 @@ use std::time::Duration;
 async fn main() {
     env_logger::init();
 
-    let mut peer = CowRpcPeer::new("tcp://127.0.0.1:12346", None);
+    let mut peer = CowRpcPeer::new("ws://127.0.0.1:12346", None);
 
     peer.on_http_msg_callback(on_http_call);
     peer.start().await.expect("peer can't start");
@@ -29,6 +29,7 @@ async fn main() {
         .expect("verify failed");
     info!("Verify returned: {}", std::str::from_utf8(&result).unwrap());
 
+    std::thread::sleep(Duration::from_secs(30));
     peer.stop().await.expect("Peer stop failed");
 }
 

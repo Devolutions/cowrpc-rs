@@ -220,7 +220,7 @@ impl CowRpcRouter {
                             if let Ok(mut transport) = transport.await {
                                 transport.set_keep_alive_interval(keep_alive_interval.clone());
 
-                                if let Err(e) = process_connection(transport, router).await {
+                                if let Err(e) = handle_connection(transport, router).await {
                                     error!("Peer finished with error: {:?}", e);
                                 }
                             };
@@ -238,7 +238,7 @@ impl CowRpcRouter {
     }
 }
 
-async fn process_connection(transport: CowRpcTransport, router: RouterShared) -> Result<()> {
+async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> Result<()> {
     let (peer, peer_sender) = tokio::time::timeout(
         std::time::Duration::from_secs(PEER_CONNECTION_GRACE_PERIOD),
         CowRpcRouterPeer::handshake(transport, router.clone()),
@@ -356,7 +356,7 @@ impl RouterShared {
         };
 
         match peer {
-            Some(_) => {
+            Some(p) => {
                 if let Some(ref callback) = &*self.inner.on_peer_disconnection_callback.read().await {
                     callback(peer_id, peer_identity.clone()).await;
                 }
@@ -596,19 +596,8 @@ pub struct CowRpcRouterPeerSharedInner {
 pub struct CowRpcRouterPeer {
     inner: Arc<CowRpcRouterPeerSharedInner>,
     identity: Arc<SyncRwLock<Option<CowRpcIdentity>>>,
-    reader_stream: Arc<Mutex<CowStreamEx<CowRpcMessage>>>,
+    reader_stream: CowStreamEx<CowRpcMessage>,
     router: RouterShared,
-}
-
-impl Clone for CowRpcRouterPeer {
-    fn clone(&self) -> Self {
-        CowRpcRouterPeer {
-            inner: self.inner.clone(),
-            identity: self.identity.clone(),
-            reader_stream: self.reader_stream.clone(),
-            router: self.router.clone(),
-        }
-    }
 }
 
 pub struct CowRpcRouterPeerSender {
@@ -654,13 +643,12 @@ fn generate_peer_id(router: &RouterShared) -> u32 {
 
 impl CowRpcRouterPeer {
     async fn run(
-        self,
+        mut self,
     ) -> std::result::Result<(u32, Option<CowRpcIdentity>), (u32, Option<CowRpcIdentity>, CowRpcError)> {
         loop {
-            let mut stream = self.reader_stream.lock().await;
-            match stream.next().await {
+            match self.reader_stream.next().await {
                 Some(Ok(msg)) => {
-                    if let Err(e) = self.clone().process_msg(msg).await {
+                    if let Err(e) = self.process_msg(msg).await {
                         debug!("Msg failed to be processed: {}", e);
                     }
                 }
@@ -702,7 +690,7 @@ impl CowRpcRouterPeer {
                         let flag: u16 = CowRpcErrorCode::Success.into();
 
                         if hdr.flags & COW_RPC_FLAG_DIRECT != 0 {
-                            unimplemented!("Direct mode is not implemented")
+                            return Err(CowRpcError::Internal("Direct mode is not implemented.".to_string()));
                         } else {
                             trace!("Client connected from {:?}", remote_addr);
 
@@ -719,7 +707,7 @@ impl CowRpcRouterPeer {
                                     CowRpcRouterPeer {
                                         inner: inner.clone(),
                                         identity: Arc::new(SyncRwLock::new(None)),
-                                        reader_stream: Arc::new(Mutex::new(reader_stream)),
+                                        reader_stream,
                                         router,
                                     },
                                     CowRpcRouterPeerSender { inner },
@@ -749,7 +737,7 @@ impl CowRpcRouterPeer {
         Ok((peer, peer_sender))
     }
 
-    async fn process_msg(mut self, msg: CowRpcMessage) -> Result<()> {
+    async fn process_msg(&mut self, msg: CowRpcMessage) -> Result<()> {
         match msg {
             CowRpcMessage::Handshake(hdr, msg) => {
                 error!(
@@ -842,7 +830,7 @@ impl CowRpcRouterPeer {
                 // to request the den identity (except the den itself of course) since a pop-token has been validated.
                 if identity.eq("den") {
                     identity = format!("den{}", self.router.inner.id);
-                    self.reader_stream.lock().await.close_on_keep_alive_timeout(false);
+                    self.reader_stream.close_on_keep_alive_timeout(false);
                 }
 
                 let identity = CowRpcIdentity {

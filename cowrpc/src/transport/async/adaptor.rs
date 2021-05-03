@@ -24,7 +24,7 @@ impl Adaptor {
     }
 
     pub fn message_stream(&self) -> CowStream<CowRpcMessage> {
-        Box::new(AdaptorStream {
+        Box::pin(AdaptorStream {
             messages: self.messages.clone(),
             waker: self.waker.clone(),
         })

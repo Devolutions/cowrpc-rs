@@ -1,65 +1,69 @@
 use std::net::SocketAddr;
 
-use futures_01::future::{err, ok};
-use futures_01::{Future, Stream};
+use futures::{Future, FutureExt};
+use futures::prelude::*;
 
 use tls_api::HandshakeError as TlsHandshakeError;
 use tls_api::{TlsAcceptor, TlsAcceptorBuilder, TlsStream};
 use tls_api_native_tls::TlsAcceptor as NativeTlsAcceptor;
 use tls_api_native_tls::TlsAcceptorBuilder as NativeTlsAcceptorBuilder;
-use async_tungstenite::tungstenite::HandshakeError;
+use async_tungstenite::tungstenite::{HandshakeError, Error};
 use async_tungstenite::tungstenite::{
     handshake::server::{NoCallback, ServerHandshake},
     stream::Stream as StreamSwitcher,
 };
-use futures::compat::Future01CompatExt;
-use futures::future::TryFutureExt;
+use tokio::io::AsyncRead;
+
 
 
 use crate::error::{CowRpcError, Result};
 use crate::transport::{
-    r#async::{Listener, CowFuture, CowStream, websocket::{ServerWebSocketHandshake, TlsHandshake, WebSocketTransport}},
+    r#async::{Listener, CowFuture, CowStream, websocket::{WebSocketTransport}},
     MessageInterceptor, TransportError,
     tls::{Identity, TlsOptions, TlsOptionsType},
 };
 use tokio::net::TcpStream;
 use tokio::net::TcpListener as TcpTokioListener;
-use async_tungstenite::tokio::accept_async;
+use async_tungstenite::tokio::{accept_async, TokioAdapter};
+use async_trait::async_trait;
+use tokio::stream::StreamExt;
+use futures::future;
+use crate::transport::r#async::websocket::CowWebSocketStream;
 
-pub type WebSocketStream = StreamSwitcher<TcpStream, TlsStream<TcpStream>>;
+// pub type WebSocketStream = StreamSwitcher<TcpStream, TlsStream<TcpStream>>;
 
-fn wrap_stream_async(tls_acceptor: &Option<NativeTlsAcceptor>, stream: TcpStream) -> CowFuture<WebSocketStream> {
-    if let Some(ref acceptor) = tls_acceptor {
-        match acceptor.accept(stream) {
-            Ok(tls) => Box::new(ok(StreamSwitcher::Tls(tls))),
-            Err(TlsHandshakeError::Interrupted(mid_hand)) => {
-                let tls_hand = TlsHandshake(Some(mid_hand));
-
-                Box::new(
-                    tokio::time::timeout(::std::time::Duration::from_secs(5),
-                                         tls_hand.compat()).compat()
-                        .map_err(|_| CowRpcError::Internal("timed out".to_string()))
-                        .and_then(move |result| {
-                            match result {
-                                Ok(tls_stream) => {
-                                    ok(StreamSwitcher::Tls(tls_stream))
-                                }
-                                Err(e) => {
-                                    err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
-                                }
-                            }
-                        })
-                )
-            }
-            Err(e) => {
-                trace!("ERROR : Tls Handshake failed with {:?}", e);
-                Box::new(err(TransportError::UnableToConnect.into()))
-            }
-        }
-    } else {
-        Box::new(ok(StreamSwitcher::Plain(stream)))
-    }
-}
+// fn wrap_stream_async(tls_acceptor: &Option<NativeTlsAcceptor>, stream: TcpStream) -> CowFuture<WebSocketStream> {
+//     if let Some(ref acceptor) = tls_acceptor {
+//         match acceptor.accept(stream) {
+//             Ok(tls) => Box::new(ok(StreamSwitcher::Tls(tls))),
+//             Err(TlsHandshakeError::Interrupted(mid_hand)) => {
+//                 let tls_hand = TlsHandshake(Some(mid_hand));
+//
+//                 Box::new(
+//                     tokio::time::timeout(::std::time::Duration::from_secs(5),
+//                                          tls_hand.compat()).compat()
+//                         .map_err(|_| CowRpcError::Internal("timed out".to_string()))
+//                         .and_then(move |result| {
+//                             match result {
+//                                 Ok(tls_stream) => {
+//                                     ok(StreamSwitcher::Tls(tls_stream))
+//                                 }
+//                                 Err(e) => {
+//                                     err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
+//                                 }
+//                             }
+//                         })
+//                 )
+//             }
+//             Err(e) => {
+//                 trace!("ERROR : Tls Handshake failed with {:?}", e);
+//                 Box::new(err(TransportError::UnableToConnect.into()))
+//             }
+//         }
+//     } else {
+//         Box::new(ok(StreamSwitcher::Plain(stream)))
+//     }
+// }
 
 pub struct WebSocketListener {
     listener: TcpTokioListener,
@@ -67,14 +71,15 @@ pub struct WebSocketListener {
     transport_cb_handler: Option<Box<dyn MessageInterceptor>>,
 }
 
+#[async_trait]
 impl Listener for WebSocketListener {
     type TransportInstance = WebSocketTransport;
 
-    fn bind(addr: &SocketAddr) -> Result<Self>
+    async fn bind(addr: &SocketAddr) -> Result<Self>
     where
         Self: Sized,
     {
-        match TcpTokioListener::bind(addr) {
+        match TcpTokioListener::bind(addr).await {
             Ok(l) => {
                 Ok(WebSocketListener {
                     listener: l,
@@ -88,55 +93,15 @@ impl Listener for WebSocketListener {
         }
     }
 
-    fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
+    async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
         let WebSocketListener { mut listener, tls_acceptor, transport_cb_handler } = self;
 
-        Box::new(listener.incoming().map_err(|e| e.into()).map(move |tcp_stream| {
-            let tls_acceptor_clone = match tls_acceptor {
-                None => None,
-                Some(ref acceptor) => Some(NativeTlsAcceptor(acceptor.0.clone()))
-            };
-            let transport_cb_handler_clone = transport_cb_handler.clone();
-
-            let fut: CowFuture<WebSocketTransport> = Box::new(
-                wrap_stream_async(&tls_acceptor_clone, tcp_stream).and_then(move |ws_stream| {
-                    let fut: CowFuture<WebSocketTransport> =
-                        //match ServerHandshake::start(ws_stream, NoCallback, None).handshake() {
-                    async {
-                        match accept_async(ws_stream).await {
-                            Ok(ws) => Box::new(ok(WebSocketTransport::new_server(
-                                ws,
-                                transport_cb_handler_clone.clone(),
-                            ))),
-                            Err(HandshakeError::Interrupted(m)) => Box::new(
-                                tokio::time::timeout(::std::time::Duration::from_secs(5),
-                                                     ServerWebSocketHandshake(Some(m)).compat()).compat()
-                                    .map_err(|_| CowRpcError::Internal("timed out".to_string()))
-                                    .and_then(move |result| {
-                                        match result {
-                                            Ok(ws) => {
-                                                ok(WebSocketTransport::new_server(
-                                                    ws,
-                                                    transport_cb_handler_clone.clone(),
-                                                ))
-                                            }
-                                            Err(e) => {
-                                                err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
-                                            }
-                                        }
-                                    })
-                            ),
-                            Err(e) => {
-                                trace!("ERROR : Handshake failed with {}", e);
-                                Box::new(err(TransportError::UnableToConnect.into()))
-                            }
-                        };
-                    };
-                    fut
-                }),
-            );
-            fut
-        }))
+        Box::pin(tokio::stream::StreamExt::map(listener, move |stream| {
+            let tcp_stream = stream?;
+            let cbh = transport_cb_handler.clone();
+            //Ok(Box::new(future::err(CowRpcError::from(TransportError::Other))) as CowFuture<Self::TransportInstance>)
+            Ok(Box::pin(accept_stream(tcp_stream, cbh)) as CowFuture<Self::TransportInstance>)
+        })) as CowStream<CowFuture<Self::TransportInstance>>
     }
 
     fn set_tls_options(&mut self, tls_opt: TlsOptions) {
@@ -170,4 +135,17 @@ impl Listener for WebSocketListener {
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
         self.transport_cb_handler = Some(cb_handler)
     }
+}
+
+async fn accept_stream(raw_stream: TcpStream, cbh: Option<Box<dyn MessageInterceptor>>) -> Result<WebSocketTransport> {
+    match accept_async(raw_stream).await {
+        Ok(ws_stream) => {
+            Ok(WebSocketTransport::new(CowWebSocketStream::AcceptStream(ws_stream), cbh))
+        }
+        Err(e) => {
+            error!("{:?}", e);
+            Err(CowRpcError::from(TransportError::Other))
+        }
+    }
+
 }

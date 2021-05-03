@@ -32,7 +32,7 @@ impl Transport for InterceptorTransport {
     }
 
     fn message_sink(&mut self) -> CowSink<CowRpcMessage> {
-        Box::new(InterceptorSink {
+        Box::pin(InterceptorSink {
             inter: self.inter.clone_boxed(),
         })
     }

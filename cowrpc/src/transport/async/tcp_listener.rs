@@ -31,16 +31,16 @@ impl Listener for TcpListener {
         }
     }
 
-    fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
+    async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
         let TcpListener {
             listener,
             transport_cb_handler,
         } = self;
 
-        Box::new(listener.map(move |stream| {
+        Box::pin(listener.map(move |stream| {
             let tcp_stream = stream?;
             let cbh = transport_cb_handler.clone();
-            Ok(Box::new(future::ok(TcpTransport::new(tcp_stream, cbh))) as CowFuture<TcpTransport>)
+            Ok(Box::pin(future::ok(TcpTransport::new(tcp_stream, cbh))) as CowFuture<TcpTransport>)
         })) as CowStream<CowFuture<Self::TransportInstance>>
     }
 

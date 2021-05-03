@@ -107,8 +107,8 @@ impl fmt::Display for TransportError {
             TransportError::UnableToConnect => write!(f, "Unable to connect"),
             TransportError::ConnectionReset => write!(f, "Connection reset"),
             TransportError::Other => write!(f, "Unknown"),
-            TransportError::TlsError(ref desc) => write!(f, "{}", desc),
-            TransportError::WsError(ref desc) => write!(f, "{}", desc),
+            TransportError::TlsError(ref desc) => write!(f, "Tls error: {}", desc),
+            TransportError::WsError(ref desc) => write!(f, "WebSocket error: {}", desc),
         }
     }
 }

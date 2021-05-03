@@ -11,7 +11,7 @@ use std::time::Duration;
 async fn main() {
     env_logger::init();
 
-    let mut peer = CowRpcPeer::new("tcp://127.0.0.1:12346", None);
+    let mut peer = CowRpcPeer::new("ws://127.0.0.1:12346", None);
 
     peer.start().await.expect("Peer start failed");
 

@@ -112,13 +112,13 @@ impl Transport for TcpTransport {
     fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
         let (reader, writer) = self.stream.into_split();
 
-        let sink = Box::new(CowMessageSink {
+        let sink = Box::pin(CowMessageSink {
             stream: writer,
             data_to_send: Vec::new(),
             callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
         });
 
-        let stream = Box::new(CowMessageStream {
+        let stream = Box::pin(CowMessageStream {
             stream: reader,
             data_received: Vec::new(),
             callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),

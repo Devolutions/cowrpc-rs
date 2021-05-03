@@ -20,7 +20,7 @@ async fn main() {
         .acceptor()
         .unwrap();
     //let (router, _router_handle) = CowRpcRouter::new("wss://router.local:12345", Some(tls_options)).await.expect("new router failed");
-    let (mut router, _router_handle) = CowRpcRouter::new("tcp://localhost:12346", Some(tls_options))
+    let (mut router, _router_handle) = CowRpcRouter::new("ws://localhost:12346", Some(tls_options))
         .await
         .expect("new router failed");
 
