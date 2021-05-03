@@ -543,7 +543,11 @@ impl CowRpcPeerAsyncMsgProcessor {
     }
 
     async fn process_terminate_req(&self, header: CowRpcHdr) -> Result<()> {
-        self.send_terminate_rsp(header.src_id).await
+        self.send_terminate_rsp(header.src_id).await?;
+
+        // Close the sink, it will send the close message on websocket
+        self.inner.writer_sink.lock().await.close().await?;
+        Ok(())
     }
 
     async fn send_failure_result_rsp(&self, dst_id: u32, call_msg: CowRpcCallMsg, flags: u16) -> Result<()> {

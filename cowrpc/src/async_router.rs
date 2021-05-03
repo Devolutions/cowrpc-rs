@@ -927,6 +927,9 @@ impl CowRpcRouterPeer {
     async fn process_terminate_req(&mut self, _: CowRpcHdr) -> Result<()> {
         *self.inner.state.write().await = CowRpcRouterPeerState::Terminated;
         self.send_terminate_rsp().await?;
+
+        // Close the sink, it will send the close message on websocket
+        self.inner.writer_sink.lock().await.close().await?;
         Ok(())
     }
 
