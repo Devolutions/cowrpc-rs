@@ -553,11 +553,11 @@ impl<S: Stream<Item = std::result::Result<WsMessage, WsError>> + Send> StreamEx 
     }
 }
 
-pub struct CowMessageSink<S: Sink<WsMessage, Error = WsError> + Send> {
-    pub stream: Option<SplitSink<S, WsMessage>>,
-    pub data_to_send: Vec<u8>,
-    pub callback_handler: Option<Box<dyn MessageInterceptor>>,
-    pub send_ws_message: Option<SendWsMessage<S>>,
+struct CowMessageSink<S: Sink<WsMessage, Error = WsError> + Send> {
+    stream: Option<SplitSink<S, WsMessage>>,
+    data_to_send: Vec<u8>,
+    callback_handler: Option<Box<dyn MessageInterceptor>>,
+    send_ws_message: Option<SendWsMessage<S>>,
 }
 
 impl<S: Sink<WsMessage, Error = WsError> + Send> Sink<CowRpcMessage> for CowMessageSink<S> {
@@ -630,7 +630,7 @@ impl<S: Sink<WsMessage, Error = WsError> + Send> Sink<CowRpcMessage> for CowMess
     }
 }
 
-pub struct SendWsMessage<S: Sink<WsMessage, Error = WsError> + Send> {
+struct SendWsMessage<S: Sink<WsMessage, Error = WsError> + Send> {
     sink: Option<SplitSink<S, WsMessage>>,
     item: Option<WsMessage>,
 }
