@@ -261,25 +261,6 @@ impl Transport for WebSocketTransport {
         Err(TransportError::UnableToConnect.into())
     }
 
-    fn message_sink(&mut self) -> CowSink<CowRpcMessage> {
-        todo!()
-        // Box::new(CowMessageSink {
-        //     stream: self.stream.clone(),
-        //     data_to_send: Vec::new(),
-        //     callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-        // })
-    }
-
-    fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage> {
-        todo!()
-        // Box::new(CowMessageStream {
-        //     stream: self.stream.clone(),
-        //     data_received: Vec::new(),
-        //     callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-        //     ping_utils: self.ping_utils.clone(),
-        // })
-    }
-
     fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
         macro_rules! boxify {
             ($reader:ident, $writer:ident) => {{

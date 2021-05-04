@@ -81,34 +81,6 @@ impl Transport for TcpTransport {
         Err(TransportError::InvalidUrl("Unable to resolve hostname".to_string()).into())
     }
 
-    fn message_sink(&mut self) -> CowSink<CowRpcMessage> {
-        todo!()
-        // let stream = self
-        //     .stream
-        //     .try_clone()
-        //     .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
-        //
-        // Box::new(CowMessageSink {
-        //     stream,
-        //     data_to_send: Vec::new(),
-        //     callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-        // })
-    }
-
-    fn message_stream(&mut self) -> CowStreamEx<CowRpcMessage> {
-        todo!()
-        // let stream = self
-        //     .stream
-        //     .try_clone()
-        //     .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
-        //
-        // Box::new(CowMessageStream {
-        //     stream,
-        //     data_received: Vec::new(),
-        //     callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-        // })
-    }
-
     fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
         let (reader, writer) = self.stream.into_split();
 

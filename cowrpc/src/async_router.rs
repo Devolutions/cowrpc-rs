@@ -141,11 +141,13 @@ impl CowRpcRouter {
         &mut self,
         interceptor: CowRpcMessageInterceptor<T>,
     ) {
+        let (_, sink) = CowRpcTransport::from_interceptor(interceptor.clone_boxed()).message_stream_sink();
+
         let peer = CowRpcRouterPeerSender {
             inner: Arc::new(CowRpcRouterPeerSharedInner {
                 cow_id: 0,
                 state: RwLock::new(CowRpcRouterPeerState::Connected),
-                writer_sink: Mutex::new(CowRpcTransport::from_interceptor(interceptor.clone_boxed()).message_sink()),
+                writer_sink: Mutex::new(sink),
             }),
         };
         *self.shared.inner.multi_router_peer.write().await = Some(peer);
