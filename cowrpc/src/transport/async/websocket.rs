@@ -271,10 +271,9 @@ impl Transport for WebSocketTransport {
                     ping_utils: self.ping_utils.clone(),
                 }),
                  Box::pin(CowMessageSink {
-                     stream: Some($writer),
+                     stream: $writer,
                      data_to_send: Vec::new(),
                      callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-                     send_ws_message: None,
                  }))
             }}
         }
@@ -456,8 +455,7 @@ impl<S: Stream<Item = std::result::Result<WsMessage, WsError>> + Send> Stream fo
         }
 
         loop {
-            let x = this.stream.poll_next_unpin(cx);
-            match ready!(x) {
+            match ready!(this.stream.poll_next_unpin(cx)) {
                 Some(Ok(msg)) => {
                     match msg {
                         WsMessage::Binary(mut data) => {
@@ -535,10 +533,9 @@ impl<S: Stream<Item = std::result::Result<WsMessage, WsError>> + Send> StreamEx 
 }
 
 struct CowMessageSink<S: Sink<WsMessage, Error = WsError> + Send> {
-    stream: Option<SplitSink<S, WsMessage>>,
+    stream: SplitSink<S, WsMessage>,
     data_to_send: Vec<u8>,
     callback_handler: Option<Box<dyn MessageInterceptor>>,
-    send_ws_message: Option<SendWsMessage<S>>,
 }
 
 impl<S: Sink<WsMessage, Error = WsError> + Send> Sink<CowRpcMessage> for CowMessageSink<S> {
@@ -566,104 +563,34 @@ impl<S: Sink<WsMessage, Error = WsError> + Send> Sink<CowRpcMessage> for CowMess
     }
 
     fn poll_flush(mut self: Pin<&mut CowMessageSink<S>>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        let this: &mut CowMessageSink<S> = self.get_mut();
+        let this = self.get_mut();
 
         loop {
-            if let Some(mut send_ws_message) = this.send_ws_message.take() {
-                match send_ws_message.poll_unpin(cx) {
-                    Poll::Ready(Ok(sink)) => {
-                        this.stream = Some(sink);
-                    },
-                    Poll::Ready(Err(e)) => {
-                        return Poll::Ready(Err(e));
+            if !(this.data_to_send.is_empty()) {
+                match ready!(this.stream.poll_ready_unpin(cx)) {
+                    Ok(_) => {
+                        let size = min(this.data_to_send.len(), WS_BIN_CHUNK_SIZE);
+                        let data_to_send: Vec<u8> = this.data_to_send.drain(0..size).collect();
+                        match this.stream.start_send_unpin(WsMessage::Binary(data_to_send)) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Poll::Ready(Err(TransportError::from(e).into()));
+                            }
+                        }
                     }
-                    Poll::Pending => {
-                        this.send_ws_message = Some(send_ws_message);
-                        return Poll::Pending;
+                    Err(e) => {
+                        return Poll::Ready(Err(TransportError::from(e).into()));
                     }
-                }
-            }
-
-            if !this.data_to_send.is_empty() {
-                let size = min(this.data_to_send.len(), WS_BIN_CHUNK_SIZE);
-                let data_to_send: Vec<u8> = this.data_to_send.drain(0..size).collect();
-
-                if let Some(sink) = this.stream.take() {
-                    this.send_ws_message = Some(SendWsMessage::new(sink, WsMessage::Binary(data_to_send)));
-                } else {
-                    // Should never happen
-                    return Poll::Ready(Err(CowRpcError::Internal("Sink is none, we can't send a websocket message".to_string())));
                 }
             } else {
                 break;
             }
         }
-        Poll::Ready(Ok(()))
+        this.stream.poll_flush_unpin(cx).map_err(|e| TransportError::from(e).into())
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        let this = self.get_mut();
-        if let Some(mut sink) = this.stream.as_mut() {
-            sink.poll_close_unpin(cx).map_err(|e|CowRpcTransportError::from(e).into())
-        } else {
-            Poll::Ready(Err(CowRpcError::Internal("Sink is none, can't be closed.".to_string())))
-        }
+        self.get_mut().stream.poll_close_unpin(cx).map_err(|e|CowRpcTransportError::from(e).into())
     }
 }
 
-struct SendWsMessage<S: Sink<WsMessage, Error = WsError> + Send> {
-    sink: Option<SplitSink<S, WsMessage>>,
-    item: Option<WsMessage>,
-}
-
-impl<S: Sink<WsMessage, Error = WsError> + Send> SendWsMessage<S> {
-    fn new(sink: SplitSink<S, WsMessage>, item: WsMessage) -> Self {
-        SendWsMessage {
-            sink: Some(sink),
-            item: Some(item),
-        }
-    }
-}
-
-impl<S: Sink<WsMessage, Error = WsError> + Send> Future for SendWsMessage<S> {
-    type Output = Result<SplitSink<S, WsMessage>>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-
-        if let Some(item) = this.item.take() {
-            if let Some(sink) = this.sink.as_mut() {
-                match sink.poll_ready_unpin(cx) {
-                    Poll::Ready(Ok(_)) => {
-                        sink.start_send_unpin(item).map_err(|e| TransportError::from(e))?;
-                    }
-                    Poll::Ready(Err(e)) => {
-                        return Poll::Ready(Err(TransportError::from(e).into()));
-                    }
-                    Poll::Pending => {
-                        this.item = Some(item);
-                        return Poll::Pending;
-                    }
-                }
-            }
-        }
-
-        if let Some(mut sink) = this.sink.take() {
-            match sink.poll_flush_unpin(cx) {
-                Poll::Pending => {
-                    this.sink = Some(sink);
-                    return Poll::Pending;
-                }
-                Poll::Ready(Ok(_)) => {
-                    return Poll::Ready(Ok(sink));
-                }
-                Poll::Ready(Err(e)) => {
-                    return Poll::Ready(Err(TransportError::from(e).into()));
-                }
-            }
-        }
-
-        // Should never happen
-        Poll::Ready(Err(CowRpcError::Internal("Invalid use of SendWsMessage future".to_string())))
-    }
-}

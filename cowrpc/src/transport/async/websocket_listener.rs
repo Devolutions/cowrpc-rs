@@ -99,7 +99,6 @@ impl Listener for WebSocketListener {
         Box::pin(tokio::stream::StreamExt::map(listener, move |stream| {
             let tcp_stream = stream?;
             let cbh = transport_cb_handler.clone();
-            //Ok(Box::new(future::err(CowRpcError::from(TransportError::Other))) as CowFuture<Self::TransportInstance>)
             Ok(Box::pin(accept_stream(tcp_stream, cbh)) as CowFuture<Self::TransportInstance>)
         })) as CowStream<CowFuture<Self::TransportInstance>>
     }

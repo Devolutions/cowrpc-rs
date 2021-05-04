@@ -12,6 +12,7 @@ const VERIFY_REQUEST: &'static [u8] = b"GET / HTTP/1.1 \r\nDen_ID: server \r\nDe
 const VERIFY_RESPONSE: &'static [u8] = b"HTTP/1.1 200 OK\r\n\r\n";
 const HTTP_REQUEST: &'static [u8] = b"GET / HTTP/1.1 \r\n\r\n";
 const HTTP_RESPONSE: &'static [u8] = b"HTTP/1.1 400 BAD REQUEST\r\n\r\n";
+const HTTP_BIG_REQUEST: &'static [u8] = &[0u8; 5000];   // We don't care what is the request, we only want more than 4096 bytes to split the request in many WS messages.
 
 
 #[tokio::test(threaded_scheduler)]
@@ -61,7 +62,13 @@ async fn start_server() -> Result<CowRpcPeer, CowRpcError> {
 }
 
 fn on_http_call(_ctx: CowRpcCallContext, request: &mut [u8]) -> CallFuture<Vec<u8>> {
-    assert_eq!(request, HTTP_REQUEST);
+    match request.as_ref() {
+        HTTP_REQUEST => {}
+        HTTP_BIG_REQUEST => {}
+        _ => {
+            assert!(false, "Unknown request");
+        }
+    }
     Box::new(futures::future::ok(HTTP_RESPONSE.to_vec()))
 }
 
@@ -84,6 +91,13 @@ async fn start_client() -> Result<CowRpcPeer, CowRpcError> {
 
     let http_response = peer
         .call_http_async_v2(server_id, HTTP_REQUEST.to_vec(), Duration::from_secs(10))
+        .await
+        .expect("call_http failed");
+
+    assert_eq!(http_response, HTTP_RESPONSE);
+
+    let http_response = peer
+        .call_http_async_v2(server_id, HTTP_BIG_REQUEST.to_vec(), Duration::from_secs(10))
         .await
         .expect("call_http failed");
 
