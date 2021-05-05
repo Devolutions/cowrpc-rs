@@ -102,7 +102,7 @@ struct InterceptorStream {}
 impl Stream for InterceptorStream {
     type Item = Result<CowRpcMessage>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Poll::Ready(Some(Err(CowRpcError::Internal("Should never be used".to_string()))))
     }
 }

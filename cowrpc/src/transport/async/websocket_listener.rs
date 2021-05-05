@@ -1,14 +1,7 @@
 use std::net::SocketAddr;
 
-use futures::prelude::*;
-use futures::{Future, FutureExt};
-
-use async_tungstenite::tungstenite::handshake::server::{NoCallback, ServerHandshake};
-use async_tungstenite::tungstenite::stream::Stream as StreamSwitcher;
-use async_tungstenite::tungstenite::{Error, HandshakeError};
-use tls_api::{HandshakeError as TlsHandshakeError, TlsAcceptor, TlsAcceptorBuilder, TlsStream};
+use tls_api::TlsAcceptorBuilder;
 use tls_api_native_tls::{TlsAcceptor as NativeTlsAcceptor, TlsAcceptorBuilder as NativeTlsAcceptorBuilder};
-use tokio::io::AsyncRead;
 
 use crate::error::{CowRpcError, Result};
 use crate::transport::r#async::websocket::{CowWebSocketStream, WebSocketTransport};
@@ -16,10 +9,9 @@ use crate::transport::r#async::{CowFuture, CowStream, Listener};
 use crate::transport::tls::{Identity, TlsOptions, TlsOptionsType};
 use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
-use async_tungstenite::tokio::{accept_async, TokioAdapter};
-use futures::future;
+use async_tungstenite::tokio::accept_async;
+
 use tokio::net::{TcpListener as TcpTokioListener, TcpStream};
-use tokio::stream::StreamExt;
 
 // pub type WebSocketStream = StreamSwitcher<TcpStream, TlsStream<TcpStream>>;
 
@@ -82,8 +74,8 @@ impl Listener for WebSocketListener {
 
     async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
         let WebSocketListener {
-            mut listener,
-            tls_acceptor,
+            listener,
+            tls_acceptor: _,
             transport_cb_handler,
         } = self;
 

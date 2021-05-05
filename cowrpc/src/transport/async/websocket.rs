@@ -2,23 +2,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::transport::r#async::{CowFuture, CowSink, Transport};
-use crate::transport::tls::TlsOptions;
+use crate::transport::r#async::{CowSink, Transport};
+
 use crate::transport::uri::Uri;
 use crate::transport::{CowRpcTransportError, MessageInterceptor, TransportError};
-use async_tungstenite::tungstenite::handshake::client::Request;
-use async_tungstenite::tungstenite::handshake::server::{NoCallback, ServerHandshake};
-use async_tungstenite::tungstenite::handshake::{HandshakeError, MidHandshake};
+
 use async_tungstenite::tungstenite::stream::Mode;
-use async_tungstenite::tungstenite::{Error, Message as WebSocketMessage, WebSocket};
+
 use byteorder::LittleEndian;
 use futures::prelude::*;
 use futures::{ready, FutureExt, SinkExt};
-use parking_lot::{Mutex, RawMutex, RwLock};
-use tls_api::{
-    HandshakeError as TlsHandshakeError, MidHandshakeTlsStream, TlsConnector, TlsConnectorBuilder, TlsStream,
-};
-use tls_api_native_tls::TlsConnector as NativeTlsConnector;
+use parking_lot::Mutex;
+
 use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
@@ -27,18 +22,16 @@ use crate::proto::{CowRpcMessage, Message};
 use crate::transport::r#async::CowStream;
 use async_trait::async_trait;
 use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
-use async_tungstenite::tungstenite::http::Response;
+
 use async_tungstenite::tungstenite::{Error as WsError, Message as WsMessage};
 use async_tungstenite::WebSocketStream;
-use futures::future::TryFutureExt;
-use futures::stream::{SplitSink, SplitStream};
+
 use futures::StreamExt;
 use std::cmp::min;
-use std::ops::DerefMut;
+
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use tokio::net::TcpStream;
-use url::idna::domain_to_ascii;
 
 type WsStream = Pin<Box<dyn Stream<Item = std::result::Result<WsMessage, WsError>> + Send + Sync>>;
 type WsSink = Pin<Box<dyn Sink<WsMessage, Error = WsError> + Send>>;
@@ -47,124 +40,6 @@ const PING_INTERVAL: u64 = 60;
 const PING_TIMEOUT: u64 = 15;
 const WS_PING_PAYLOAD: &'static [u8] = b"";
 const WS_BIN_CHUNK_SIZE: usize = 4096;
-
-//pub type WebSocketStream = StreamSwitcher<TcpStream, TlsStream<TcpStream>>;
-
-// pub fn wrap_stream_async(stream: TcpStream, domain: &str, mode: Mode, tls_options: Option<TlsOptions>) -> CowFuture<WebSocketStream> {
-//     match mode {
-//         Mode::Plain => Box::new(future::ok(StreamSwitcher::Plain(stream))),
-//         Mode::Tls => {
-//             let mut connector_builder = match NativeTlsConnector::builder().map_err(|e| TransportError::from(e)) {
-//                 Ok(c) => c,
-//                 Err(e) => return Box::new(futures_01::failed(e.into()))
-//             };
-//
-//             if let Some(tls_options) = tls_options {
-//                 for certificate in tls_options.root_certificates {
-//                     trace!("adding root certificate");
-//                     if let Err(e) = connector_builder.add_root_certificate(certificate).map_err(|e| TransportError::from(e)) {
-//                         return Box::new(futures_01::failed(e.into()));
-//                     }
-//                 }
-//             }
-//
-//             let connector = match connector_builder.build().map_err(|e| TransportError::from(e))
-//             {
-//                 Ok(c) => c,
-//                 Err(e) => return Box::new(futures_01::failed(e.into())),
-//             };
-//             match connector.connect(domain, stream) {
-//                 Ok(tls) => Box::new(futures_01::finished(StreamSwitcher::Tls(tls))),
-//                 Err(TlsHandshakeError::Interrupted(mid_hand)) => {
-//                     let tls_hand = TlsHandshake(Some(mid_hand));
-//
-//                     Box::new(
-//                     tokio::time::timeout(::std::time::Duration::from_secs(5),
-//                                          tls_hand.compat()).compat()
-//                         .map_err(|_| CowRpcError::Internal("timed out".to_string()))
-//                         .and_then(move |result| {
-//                             match result {
-//                                 Ok(tls_stream) => {
-//                                     ok(StreamSwitcher::Tls(tls_stream))
-//                                 }
-//                                 Err(e) => {
-//                                     err(CowRpcError::Internal(format!("The receiver has been cancelled, {:?}", e)))
-//                                 }
-//                             }
-//                         })
-//                     )
-//                 }
-//                 Err(e) => {
-//                     trace!("ERROR : Tls Handshake failed with {:?}", e);
-//                     Box::new(futures_01::failed(TransportError::UnableToConnect.into()))
-//                 }
-//             }
-//         }
-//     }
-// }
-
-// pub struct ServerWebSocketHandshake(pub Option<MidHandshake<ServerHandshake<WebSocketStream, NoCallback>>>);
-//
-// impl Future for ServerWebSocketHandshake {
-//     type Output = Result<WebSocket<WebSocketStream>>;
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         let handshake = self.0.take().expect("This should never happen");
-//         match handshake.handshake() {
-//             Ok(ws) => Poll::Ready(Ok(ws)),
-//             Err(HandshakeError::Interrupted(m)) => {
-//                 self.0 = Some(m);
-//                 Poll::Pending
-//             }
-//             Err(e) => {
-//                 trace!("ERROR : Handshake failed with {}", e);
-//                 Poll::Ready(Err(TransportError::UnableToConnect.into()))
-//             }
-//         }
-//     }
-// }
-
-// struct ClientWebSocketHandshake(Option<MidHandshake<ClientHandshake<WebSocketStream>>>);
-//
-// impl Future for ClientWebSocketHandshake {
-//     type Output = Result<WebSocket<WebSocketStream>>;
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         let handshake = self.0.take().expect("This should never happen");
-//         match handshake.handshake() {
-//             Ok(res) => Poll::Ready(Ok(res.0)),
-//             Err(HandshakeError::Interrupted(m)) => {
-//                 self.0 = Some(m);
-//                 Poll::Pending
-//             }
-//             Err(e) => {
-//                 trace!("ERROR : Handshake failed with {}", e);
-//                 Poll::Ready(Err(TransportError::UnableToConnect.into()))
-//             }
-//         }
-//     }
-// }
-
-// pub struct TlsHandshake(pub Option<MidHandshakeTlsStream<TcpStream>>);
-//
-// impl Future for TlsHandshake {
-//     type Output = Result<TlsStream<TcpStream>>;
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-//         let handshake = self.0.take().expect("This should never happen");
-//         match handshake.handshake() {
-//             Ok(tls) => Poll::Ready(Ok(tls)),
-//             Err(TlsHandshakeError::Interrupted(m)) => {
-//                 self.0 = Some(m);
-//                 Poll::Pending
-//             }
-//             Err(e) => {
-//                 trace!("ERROR : Tls Handshake failed with {:?}", e);
-//                 Poll::Ready(Err(TransportError::UnableToConnect.into()))
-//             }
-//         }
-//     }
-// }
 
 struct WsPingConfig {
     ping_interval: Duration,
@@ -309,11 +184,11 @@ impl Transport for WebSocketTransport {
     where
         Self: Sized,
     {
-        let domain = uri.host().unwrap_or("").to_string();
-        let url =
+        let _domain = uri.host().unwrap_or("").to_string();
+        let _url =
             Url::parse(&uri.to_string()).map_err(|_| crate::error::CowRpcError::Internal("Bad server url".into()))?;
 
-        let (mut port, mode) = match uri.scheme() {
+        let (mut port, _mode) = match uri.scheme() {
             Some("ws") => (80, Mode::Plain),
             Some("wss") => (443, Mode::Tls),
             scheme => {
@@ -327,7 +202,7 @@ impl Transport for WebSocketTransport {
 
         if let Ok(addrs) = uri.get_addrs() {
             if let Some(addr) = addrs.iter().find(|ip| ip.is_ipv4()) {
-                let sock_addr = SocketAddr::new(addr.clone(), port);
+                let _sock_addr = SocketAddr::new(addr.clone(), port);
 
                 match async_tungstenite::tokio::connect_async(uri.to_string()).await {
                     Ok((stream, _)) => {
@@ -546,10 +421,7 @@ impl CowMessageSink {
 impl Sink<CowRpcMessage> for CowMessageSink {
     type Error = CowRpcError;
 
-    fn poll_ready(
-        mut self: Pin<&mut CowMessageSink>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_ready(self: Pin<&mut CowMessageSink>, _cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -570,10 +442,7 @@ impl Sink<CowRpcMessage> for CowMessageSink {
         Ok(())
     }
 
-    fn poll_flush(
-        mut self: Pin<&mut CowMessageSink>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_flush(self: Pin<&mut CowMessageSink>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
         let this = self.get_mut();
         let mut stream = ready!(Box::pin(this.sink.lock()).poll_unpin(cx));
         loop {
@@ -600,7 +469,7 @@ impl Sink<CowRpcMessage> for CowMessageSink {
         stream.poll_flush_unpin(cx).map_err(|e| TransportError::from(e).into())
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
         let mut stream = ready!(Box::pin(self.sink.lock()).poll_unpin(cx));
         stream
             .poll_close_unpin(cx)

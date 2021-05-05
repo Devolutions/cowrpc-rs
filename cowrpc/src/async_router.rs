@@ -361,7 +361,7 @@ impl RouterShared {
         };
 
         match peer {
-            Some(p) => {
+            Some(_p) => {
                 if let Some(ref callback) = &*self.inner.on_peer_disconnection_callback.read().await {
                     callback(peer_id, peer_identity.clone()).await;
                 }
