@@ -11,12 +11,12 @@ use crate::CowRpcMessage;
 use async_trait::async_trait;
 use std::pin::Pin;
 
+pub mod adaptor;
+mod interceptor;
 mod tcp;
 mod tcp_listener;
 mod websocket;
 mod websocket_listener;
-pub mod adaptor;
-mod interceptor;
 
 pub type CowFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 pub type CowStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send>>;
@@ -156,9 +156,9 @@ impl ListenerBuilder {
             Some(SupportedProto::Tcp) => tcp_listener::TcpListener::bind(interface)
                 .await
                 .map(|l| CowRpcListener::Tcp(l))?,
-            Some(SupportedProto::WebSocket) => {
-                websocket_listener::WebSocketListener::bind(interface).await.map(|l| CowRpcListener::WebSocket(l))?
-            }
+            Some(SupportedProto::WebSocket) => websocket_listener::WebSocketListener::bind(interface)
+                .await
+                .map(|l| CowRpcListener::WebSocket(l))?,
             _ => {
                 return Err(CowRpcError::Internal(
                     "Unable to build listener, missing protocol".to_string(),
@@ -203,7 +203,8 @@ impl CowRpcListener {
                 let incoming = ws.incoming().await;
                 Box::pin(futures::StreamExt::map(incoming, |result| {
                     let fut = result?;
-                    let cow_fut = Box::pin(fut.and_then(|transport| future::ok(CowRpcTransport::WebSocket(transport)))) as CowFuture<CowRpcTransport>;
+                    let cow_fut = Box::pin(fut.and_then(|transport| future::ok(CowRpcTransport::WebSocket(transport))))
+                        as CowFuture<CowRpcTransport>;
                     Ok(cow_fut)
                 })) as CowStream<CowFuture<CowRpcTransport>>
             }
@@ -261,9 +262,9 @@ impl Transport for CowRpcTransport {
                 "tcp" => tcp::TcpTransport::connect(uri)
                     .await
                     .map(|transport| CowRpcTransport::Tcp(transport)),
-                "ws" | "wss" =>
-                    websocket::WebSocketTransport::connect(uri).await
-                        .map(|transport| CowRpcTransport::WebSocket(transport)),
+                "ws" | "wss" => websocket::WebSocketTransport::connect(uri)
+                    .await
+                    .map(|transport| CowRpcTransport::WebSocket(transport)),
                 _ => Err(TransportError::InvalidUrl("Bad scheme provided".to_string()).into()),
             }
         } else {

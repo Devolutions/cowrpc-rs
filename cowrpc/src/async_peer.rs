@@ -11,6 +11,7 @@ use futures::channel::oneshot::channel;
 use futures::prelude::*;
 use futures::ready;
 
+use crate::transport::r#async::CowStream;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::{self, AtomicUsize};
@@ -19,7 +20,6 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use crate::transport::r#async::CowStream;
 
 pub type CallFuture<T> = Box<dyn Future<Output = std::result::Result<T, ()>> + Unpin + Send>;
 type HttpMsgCallback = dyn Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>> + Send + Sync;

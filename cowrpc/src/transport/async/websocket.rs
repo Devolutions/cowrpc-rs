@@ -1,42 +1,44 @@
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use byteorder::{LittleEndian};
+use crate::transport::r#async::{CowFuture, CowSink, Transport};
+use crate::transport::tls::TlsOptions;
+use crate::transport::uri::Uri;
+use crate::transport::{CowRpcTransportError, MessageInterceptor, TransportError};
+use async_tungstenite::tungstenite::handshake::client::Request;
+use async_tungstenite::tungstenite::handshake::server::{NoCallback, ServerHandshake};
+use async_tungstenite::tungstenite::handshake::{HandshakeError, MidHandshake};
+use async_tungstenite::tungstenite::stream::Mode;
+use async_tungstenite::tungstenite::{Error, Message as WebSocketMessage, WebSocket};
+use byteorder::LittleEndian;
 use futures::prelude::*;
-use parking_lot::{Mutex, RwLock, RawMutex};
-use tokio::sync::Mutex as AsyncMutex;
-use tls_api::{HandshakeError as TlsHandshakeError, MidHandshakeTlsStream, TlsConnector, TlsConnectorBuilder, TlsStream};
-use tls_api_native_tls::TlsConnector as NativeTlsConnector;
-use crate::transport::{r#async::{Transport, CowFuture, CowSink}, uri::Uri, MessageInterceptor, TransportError, tls::TlsOptions, CowRpcTransportError};
-use async_tungstenite::tungstenite::handshake::{
-    client::{Request},
-    server::{NoCallback, ServerHandshake},
-    HandshakeError, MidHandshake,
+use futures::{ready, FutureExt, SinkExt};
+use parking_lot::{Mutex, RawMutex, RwLock};
+use tls_api::{
+    HandshakeError as TlsHandshakeError, MidHandshakeTlsStream, TlsConnector, TlsConnectorBuilder, TlsStream,
 };
-use async_tungstenite::tungstenite::{stream::{Mode}, Message as WebSocketMessage, WebSocket, Error};
+use tls_api_native_tls::TlsConnector as NativeTlsConnector;
+use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
-use futures::{ready, SinkExt, FutureExt};
 
 use crate::error::{CowRpcError, Result};
 use crate::proto::{CowRpcMessage, Message};
-use futures::future::TryFutureExt;
-use std::task::{Context, Poll, Waker};
-use std::pin::Pin;
-use tokio::net::TcpStream;
-use async_trait::async_trait;
-use async_tungstenite::tungstenite::http::Response;
-use async_tungstenite::tokio::{TokioAdapter, ConnectStream};
-use futures::StreamExt;
-use async_tungstenite::WebSocketStream;
-use async_tungstenite::tungstenite::{Error as WsError, Message as WsMessage};
-use futures::stream::{SplitSink, SplitStream};
-use url::idna::domain_to_ascii;
-use std::cmp::min;
 use crate::transport::r#async::CowStream;
+use async_trait::async_trait;
+use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
+use async_tungstenite::tungstenite::http::Response;
+use async_tungstenite::tungstenite::{Error as WsError, Message as WsMessage};
+use async_tungstenite::WebSocketStream;
+use futures::future::TryFutureExt;
+use futures::stream::{SplitSink, SplitStream};
+use futures::StreamExt;
+use std::cmp::min;
 use std::ops::DerefMut;
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
+use tokio::net::TcpStream;
+use url::idna::domain_to_ascii;
 
 type WsStream = Pin<Box<dyn Stream<Item = std::result::Result<WsMessage, WsError>> + Send + Sync>>;
 type WsSink = Pin<Box<dyn Sink<WsMessage, Error = WsError> + Send>>;
@@ -171,7 +173,7 @@ struct WsPingConfig {
 impl WsPingConfig {
     fn new(ping_interval: Option<Duration>) -> Self {
         WsPingConfig {
-            ping_interval: ping_interval.unwrap_or_else(||Duration::from_secs(PING_INTERVAL)),
+            ping_interval: ping_interval.unwrap_or_else(|| Duration::from_secs(PING_INTERVAL)),
         }
     }
 }
@@ -223,7 +225,12 @@ impl ServerWebSocketPingUtils {
         let ping_utils = self.clone();
 
         tokio::spawn(async move {
-            let result = ping_utils.ws_sink.lock().await.send(WsMessage::Ping(WS_PING_PAYLOAD.to_vec())).await;
+            let result = ping_utils
+                .ws_sink
+                .lock()
+                .await
+                .send(WsMessage::Ping(WS_PING_PAYLOAD.to_vec()))
+                .await;
             match result {
                 Ok(_) => {
                     trace!("WS_PING sent");
@@ -266,7 +273,7 @@ impl ServerWebSocketPingUtils {
 
 pub enum CowWebSocketStream {
     ConnectStream(WebSocketStream<ConnectStream>),
-    AcceptStream(WebSocketStream<TokioAdapter<TcpStream>>)
+    AcceptStream(WebSocketStream<TokioAdapter<TcpStream>>),
 }
 
 pub struct WebSocketTransport {
@@ -286,10 +293,7 @@ impl WebSocketTransport {
         }
     }
 
-    pub fn new_server(
-        stream: CowWebSocketStream,
-        callback_handler: Option<Box<dyn MessageInterceptor>>,
-    ) -> Self {
+    pub fn new_server(stream: CowWebSocketStream, callback_handler: Option<Box<dyn MessageInterceptor>>) -> Self {
         WebSocketTransport {
             stream,
             callback_handler,
@@ -306,7 +310,8 @@ impl Transport for WebSocketTransport {
         Self: Sized,
     {
         let domain = uri.host().unwrap_or("").to_string();
-        let url = Url::parse(&uri.to_string()).map_err(|_| crate::error::CowRpcError::Internal("Bad server url".into()))?;
+        let url =
+            Url::parse(&uri.to_string()).map_err(|_| crate::error::CowRpcError::Internal("Bad server url".into()))?;
 
         let (mut port, mode) = match uri.scheme() {
             Some("ws") => (80, Mode::Plain),
@@ -356,7 +361,11 @@ impl Transport for WebSocketTransport {
             ping_util = Some(ServerWebSocketPingUtils::new(ping_config, sink.clone()))
         }
 
-        let cow_stream = CowMessageStream::new(stream, self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()), ping_util);
+        let cow_stream = CowMessageStream::new(
+            stream,
+            self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
+            ping_util,
+        );
         let cow_sink = CowMessageSink::new(sink, self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()));
         (Box::pin(cow_stream), Box::pin(cow_sink))
     }
@@ -394,12 +403,16 @@ pub struct CowMessageStream {
 }
 
 impl CowMessageStream {
-    fn new(stream: WsStream, callback_handler: Option<Box<dyn MessageInterceptor>>, ping_utils: Option<ServerWebSocketPingUtils>) -> Self {
+    fn new(
+        stream: WsStream,
+        callback_handler: Option<Box<dyn MessageInterceptor>>,
+        ping_utils: Option<ServerWebSocketPingUtils>,
+    ) -> Self {
         CowMessageStream {
             stream,
             data_received: Vec::new(),
             callback_handler,
-            ping_utils
+            ping_utils,
         }
     }
 }
@@ -415,7 +428,8 @@ impl Stream for CowMessageStream {
         {
             let data_len = this.data_received.len();
             if data_len > 4 {
-                let msg_len = byteorder::ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize;
+                let msg_len =
+                    byteorder::ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize;
                 if data_len >= msg_len {
                     let msg;
                     let v: Vec<u8>;
@@ -444,52 +458,52 @@ impl Stream for CowMessageStream {
 
         loop {
             match ready!(this.stream.poll_next_unpin(cx)) {
-                Some(Ok(msg)) => {
-                    match msg {
-                        WsMessage::Binary(mut data) => {
-                            this.data_received.append(&mut data);
-                            let data_len = this.data_received.len();
-                            if data_len > 4 {
-                                let msg_len = byteorder::ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())? as usize;
-                                if data_len >= msg_len {
-                                    let msg;
-                                    let v: Vec<u8>;
-                                    {
-                                        let mut slice: &[u8] = &this.data_received;
-                                        msg = CowRpcMessage::read_from(&mut slice)?;
-                                        v = slice.to_vec();
-                                    }
-                                    this.data_received = v;
+                Some(Ok(msg)) => match msg {
+                    WsMessage::Binary(mut data) => {
+                        this.data_received.append(&mut data);
+                        let data_len = this.data_received.len();
+                        if data_len > 4 {
+                            let msg_len =
+                                byteorder::ReadBytesExt::read_u32::<LittleEndian>(&mut this.data_received.as_slice())?
+                                    as usize;
+                            if data_len >= msg_len {
+                                let msg;
+                                let v: Vec<u8>;
+                                {
+                                    let mut slice: &[u8] = &this.data_received;
+                                    msg = CowRpcMessage::read_from(&mut slice)?;
+                                    v = slice.to_vec();
+                                }
+                                this.data_received = v;
 
-                                    if let Some(ref mut interceptor) = this.callback_handler {
-                                        match interceptor.before_recv(msg) {
-                                            Some(msg) => {
-                                                debug!("<< {}", msg.get_msg_info());
-                                                return Poll::Ready(Some(Ok(msg)));
-                                            }
-                                            None => {}
-                                        };
-                                    } else {
-                                        debug!("<< {}", msg.get_msg_info());
-                                        return Poll::Ready(Some(Ok(msg)));
-                                    }
+                                if let Some(ref mut interceptor) = this.callback_handler {
+                                    match interceptor.before_recv(msg) {
+                                        Some(msg) => {
+                                            debug!("<< {}", msg.get_msg_info());
+                                            return Poll::Ready(Some(Ok(msg)));
+                                        }
+                                        None => {}
+                                    };
+                                } else {
+                                    debug!("<< {}", msg.get_msg_info());
+                                    return Poll::Ready(Some(Ok(msg)));
                                 }
                             }
-                            continue;
                         }
-                        WsMessage::Pong(_) | WsMessage::Ping(_) => {
-                            if let Some(ping_utils) = &this.ping_utils {
-                                ping_utils.pong_received();
-                            }
-                        }
-                        WsMessage::Close(_) => {
-                            return Poll::Ready(None)
-                        }
-                        WsMessage::Text(_) => {
-                            return Poll::Ready(Some(Err(crate::error::CowRpcError::Proto("Text webSocket messages are not supported.".into()))))
-                        },
+                        continue;
                     }
-                }
+                    WsMessage::Pong(_) | WsMessage::Ping(_) => {
+                        if let Some(ping_utils) = &this.ping_utils {
+                            ping_utils.pong_received();
+                        }
+                    }
+                    WsMessage::Close(_) => return Poll::Ready(None),
+                    WsMessage::Text(_) => {
+                        return Poll::Ready(Some(Err(crate::error::CowRpcError::Proto(
+                            "Text webSocket messages are not supported.".into(),
+                        ))))
+                    }
+                },
                 Some(Err(WsError::Io(e))) if e.kind() == ::std::io::ErrorKind::WouldBlock => {
                     return Poll::Pending;
                 }
@@ -498,7 +512,7 @@ impl Stream for CowMessageStream {
                         WsError::ConnectionClosed => {
                             // WebSocket connection closed normally. The stream is terminated
                             return Poll::Ready(None);
-                        },
+                        }
                         e => {
                             error!("ws.read_message returned error: {}", e);
                             return Poll::Ready(Some(Err(CowRpcTransportError::from(e).into())));
@@ -524,7 +538,7 @@ impl CowMessageSink {
         CowMessageSink {
             sink: sink,
             data_to_send: Vec::new(),
-            callback_handler
+            callback_handler,
         }
     }
 }
@@ -532,7 +546,10 @@ impl CowMessageSink {
 impl Sink<CowRpcMessage> for CowMessageSink {
     type Error = CowRpcError;
 
-    fn poll_ready(mut self: Pin<&mut CowMessageSink>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_ready(
+        mut self: Pin<&mut CowMessageSink>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -553,7 +570,10 @@ impl Sink<CowRpcMessage> for CowMessageSink {
         Ok(())
     }
 
-    fn poll_flush(mut self: Pin<&mut CowMessageSink>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+    fn poll_flush(
+        mut self: Pin<&mut CowMessageSink>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
         let this = self.get_mut();
         let mut stream = ready!(Box::pin(this.sink.lock()).poll_unpin(cx));
         loop {
@@ -582,7 +602,8 @@ impl Sink<CowRpcMessage> for CowMessageSink {
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
         let mut stream = ready!(Box::pin(self.sink.lock()).poll_unpin(cx));
-        stream.poll_close_unpin(cx).map_err(|e|CowRpcTransportError::from(e).into())
+        stream
+            .poll_close_unpin(cx)
+            .map_err(|e| CowRpcTransportError::from(e).into())
     }
 }
-

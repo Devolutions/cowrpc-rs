@@ -1,7 +1,7 @@
 use crate::error::CowRpcError;
 use crate::proto::{CowRpcMessage, Message};
 use crate::tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::transport::r#async::{CowSink, Transport};
+use crate::transport::r#async::{CowSink, CowStream, Transport};
 use crate::transport::uri::Uri;
 use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
@@ -15,7 +15,6 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
-use crate::transport::r#async::CowStream;
 
 pub struct TcpTransport {
     stream: TcpStream,

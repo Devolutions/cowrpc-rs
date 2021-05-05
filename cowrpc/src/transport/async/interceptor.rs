@@ -1,6 +1,6 @@
 use crate::error::{CowRpcError, Result};
 use crate::proto::CowRpcMessage;
-use crate::transport::r#async::{CowSink, Transport};
+use crate::transport::r#async::{CowSink, CowStream, Transport};
 use crate::transport::uri::Uri;
 use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
@@ -9,7 +9,6 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use crate::transport::r#async::CowStream;
 
 pub struct InterceptorTransport {
     pub inter: Box<dyn MessageInterceptor>,
@@ -37,7 +36,7 @@ impl Transport for InterceptorTransport {
             inter: self.inter.clone_boxed(),
         });
 
-        let stream = Box::pin(InterceptorStream{});
+        let stream = Box::pin(InterceptorStream {});
 
         (stream, sink)
     }

@@ -4,7 +4,7 @@ extern crate log;
 extern crate tls_api;
 
 use cowrpc::async_peer::CowRpcPeer;
-use log::{info};
+use log::info;
 use std::time::Duration;
 
 #[tokio::main]

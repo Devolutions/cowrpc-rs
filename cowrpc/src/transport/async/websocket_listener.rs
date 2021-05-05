@@ -1,34 +1,25 @@
 use std::net::SocketAddr;
 
-use futures::{Future, FutureExt};
 use futures::prelude::*;
+use futures::{Future, FutureExt};
 
-use tls_api::HandshakeError as TlsHandshakeError;
-use tls_api::{TlsAcceptor, TlsAcceptorBuilder, TlsStream};
-use tls_api_native_tls::TlsAcceptor as NativeTlsAcceptor;
-use tls_api_native_tls::TlsAcceptorBuilder as NativeTlsAcceptorBuilder;
-use async_tungstenite::tungstenite::{HandshakeError, Error};
-use async_tungstenite::tungstenite::{
-    handshake::server::{NoCallback, ServerHandshake},
-    stream::Stream as StreamSwitcher,
-};
+use async_tungstenite::tungstenite::handshake::server::{NoCallback, ServerHandshake};
+use async_tungstenite::tungstenite::stream::Stream as StreamSwitcher;
+use async_tungstenite::tungstenite::{Error, HandshakeError};
+use tls_api::{HandshakeError as TlsHandshakeError, TlsAcceptor, TlsAcceptorBuilder, TlsStream};
+use tls_api_native_tls::{TlsAcceptor as NativeTlsAcceptor, TlsAcceptorBuilder as NativeTlsAcceptorBuilder};
 use tokio::io::AsyncRead;
 
-
-
 use crate::error::{CowRpcError, Result};
-use crate::transport::{
-    r#async::{Listener, CowFuture, CowStream, websocket::{WebSocketTransport}},
-    MessageInterceptor, TransportError,
-    tls::{Identity, TlsOptions, TlsOptionsType},
-};
-use tokio::net::TcpStream;
-use tokio::net::TcpListener as TcpTokioListener;
-use async_tungstenite::tokio::{accept_async, TokioAdapter};
+use crate::transport::r#async::websocket::{CowWebSocketStream, WebSocketTransport};
+use crate::transport::r#async::{CowFuture, CowStream, Listener};
+use crate::transport::tls::{Identity, TlsOptions, TlsOptionsType};
+use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
-use tokio::stream::StreamExt;
+use async_tungstenite::tokio::{accept_async, TokioAdapter};
 use futures::future;
-use crate::transport::r#async::websocket::CowWebSocketStream;
+use tokio::net::{TcpListener as TcpTokioListener, TcpStream};
+use tokio::stream::StreamExt;
 
 // pub type WebSocketStream = StreamSwitcher<TcpStream, TlsStream<TcpStream>>;
 
@@ -80,21 +71,21 @@ impl Listener for WebSocketListener {
         Self: Sized,
     {
         match TcpTokioListener::bind(addr).await {
-            Ok(l) => {
-                Ok(WebSocketListener {
-                    listener: l,
-                    tls_acceptor: None,
-                    transport_cb_handler: None,
-                })
-            }
-            Err(e) => {
-                Err(e.into())
-            }
+            Ok(l) => Ok(WebSocketListener {
+                listener: l,
+                tls_acceptor: None,
+                transport_cb_handler: None,
+            }),
+            Err(e) => Err(e.into()),
         }
     }
 
     async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
-        let WebSocketListener { mut listener, tls_acceptor, transport_cb_handler } = self;
+        let WebSocketListener {
+            mut listener,
+            tls_acceptor,
+            transport_cb_handler,
+        } = self;
 
         Box::pin(tokio::stream::StreamExt::map(listener, move |stream| {
             let tcp_stream = stream?;
@@ -115,20 +106,20 @@ impl Listener for WebSocketListener {
         match identity {
             Identity::Pkcs12(pkcs12) => {
                 let acceptor = match NativeTlsAcceptorBuilder::from_pkcs12(&pkcs12.der, &pkcs12.password)
-                    .and_then(|a| a.build()) {
+                    .and_then(|a| a.build())
+                {
                     Ok(r) => r,
                     Err(e) => {
                         error!("Unable to set new tls options on listener : {:?}", e);
-                        return
-                    },
+                        return;
+                    }
                 };
 
                 self.tls_acceptor = Some(acceptor);
             }
-            
-            Identity::None => unreachable!()
-        }
 
+            Identity::None => unreachable!(),
+        }
     }
 
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
@@ -138,13 +129,13 @@ impl Listener for WebSocketListener {
 
 async fn accept_stream(raw_stream: TcpStream, cbh: Option<Box<dyn MessageInterceptor>>) -> Result<WebSocketTransport> {
     match accept_async(raw_stream).await {
-        Ok(ws_stream) => {
-            Ok(WebSocketTransport::new_server(CowWebSocketStream::AcceptStream(ws_stream), cbh))
-        }
+        Ok(ws_stream) => Ok(WebSocketTransport::new_server(
+            CowWebSocketStream::AcceptStream(ws_stream),
+            cbh,
+        )),
         Err(e) => {
             error!("{:?}", e);
             Err(CowRpcError::from(TransportError::Other))
         }
     }
-
 }

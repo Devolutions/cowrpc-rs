@@ -1,10 +1,10 @@
+use cowrpc::async_peer::{CallFuture, CowRpcPeer};
 use cowrpc::async_router::CowRpcRouter;
+use cowrpc::error::CowRpcError;
+use cowrpc::CowRpcCallContext;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use cowrpc::error::CowRpcError;
 use std::time::Duration;
-use cowrpc::async_peer::{CowRpcPeer, CallFuture};
-use cowrpc::CowRpcCallContext;
 
 const ROUTER_URL: &str = "ws://localhost:12346";
 const SERVER_IDENTITY: &str = "server";
@@ -12,8 +12,7 @@ const VERIFY_REQUEST: &'static [u8] = b"GET / HTTP/1.1 \r\nDen_ID: server \r\nDe
 const VERIFY_RESPONSE: &'static [u8] = b"HTTP/1.1 200 OK\r\n\r\n";
 const HTTP_REQUEST: &'static [u8] = b"GET / HTTP/1.1 \r\n\r\n";
 const HTTP_RESPONSE: &'static [u8] = b"HTTP/1.1 400 BAD REQUEST\r\n\r\n";
-const HTTP_BIG_REQUEST: &'static [u8] = &[0u8; 5000];   // We don't care what is the request, we only want more than 4096 bytes to split the request in many WS messages.
-
+const HTTP_BIG_REQUEST: &'static [u8] = &[0u8; 5000]; // We don't care what is the request, we only want more than 4096 bytes to split the request in many WS messages.
 
 #[tokio::test(threaded_scheduler)]
 async fn router_peers() {
@@ -29,9 +28,7 @@ async fn router_peers() {
 }
 
 async fn start_router() -> Result<(), CowRpcError> {
-    let (mut router, _router_handle) = CowRpcRouter::new(ROUTER_URL, None)
-        .await
-        .expect("new router failed");
+    let (mut router, _router_handle) = CowRpcRouter::new(ROUTER_URL, None).await.expect("new router failed");
 
     router.verify_identity_callback(verify_identity_callback).await;
 

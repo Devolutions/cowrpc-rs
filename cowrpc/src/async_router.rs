@@ -17,10 +17,10 @@ use std::collections::HashMap;
 
 use std::sync::Arc;
 
+use crate::transport::r#async::CowStream;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use {mouscache, rand, std};
-use crate::transport::r#async::CowStream;
 
 pub type RouterMonitor = Receiver<()>;
 
