@@ -1,6 +1,6 @@
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
-use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, Transport};
+use crate::transport::r#async::{CowRpcTransport, CowSink, Transport};
 use crate::transport::Uri;
 use crate::{
     proto, transport, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq, CowRpcAsyncResolveReq,
@@ -19,6 +19,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
+use crate::transport::r#async::CowStream;
 
 pub type CallFuture<T> = Box<dyn Future<Output = std::result::Result<T, ()>> + Unpin + Send>;
 type HttpMsgCallback = dyn Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>> + Send + Sync;
@@ -720,7 +721,7 @@ impl CowRpcPeerAsyncMsgProcessor {
 
 struct CowRpcAsyncPeer {
     inner: CowRpcPeerSharedInner,
-    reader_stream: CowStreamEx<CowRpcMessage>,
+    reader_stream: CowStream<CowRpcMessage>,
 }
 
 impl CowRpcAsyncPeer {

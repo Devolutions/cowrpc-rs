@@ -22,11 +22,6 @@ pub type CowFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 pub type CowStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send>>;
 pub type CowSink<T> = Pin<Box<dyn Sink<T, Error = CowRpcError> + Send>>;
 
-pub type CowStreamEx<T> = Pin<Box<dyn StreamEx<Item = Result<T>>>>;
-pub trait StreamEx: Stream + Sync + Send + Unpin {
-    fn close_on_keep_alive_timeout(&mut self, close: bool);
-}
-
 #[async_trait]
 pub trait Listener {
     type TransportInstance: Transport;
@@ -235,9 +230,9 @@ pub trait Transport {
     async fn connect(uri: Uri) -> Result<Self>
     where
         Self: Sized;
-    fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>);
+    fn message_stream_sink(self) -> (CowStream<CowRpcMessage>, CowSink<CowRpcMessage>);
     fn set_message_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
-    fn set_keep_alive_interval(&mut self, interval: Option<Duration>);
+    fn set_keep_alive_interval(&mut self, interval: Duration);
     fn local_addr(&self) -> Option<SocketAddr>;
     fn remote_addr(&self) -> Option<SocketAddr>;
     fn up_time(&self) -> Duration;
@@ -276,7 +271,7 @@ impl Transport for CowRpcTransport {
         }
     }
 
-    fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
+    fn message_stream_sink(self) -> (CowStream<CowRpcMessage>, CowSink<CowRpcMessage>) {
         match self {
             CowRpcTransport::Tcp(tcp) => tcp.message_stream_sink(),
             CowRpcTransport::WebSocket(ws) => ws.message_stream_sink(),
@@ -292,7 +287,7 @@ impl Transport for CowRpcTransport {
         }
     }
 
-    fn set_keep_alive_interval(&mut self, interval: Option<Duration>) {
+    fn set_keep_alive_interval(&mut self, interval: Duration) {
         match self {
             CowRpcTransport::Tcp(ref mut tcp) => tcp.set_keep_alive_interval(interval),
             CowRpcTransport::WebSocket(ref mut ws) => ws.set_keep_alive_interval(interval),

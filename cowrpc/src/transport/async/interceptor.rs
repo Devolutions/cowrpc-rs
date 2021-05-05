@@ -1,6 +1,6 @@
 use crate::error::{CowRpcError, Result};
 use crate::proto::CowRpcMessage;
-use crate::transport::r#async::{CowSink, CowStreamEx, Transport};
+use crate::transport::r#async::{CowSink, Transport};
 use crate::transport::uri::Uri;
 use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use crate::transport::r#async::StreamEx;
+use crate::transport::r#async::CowStream;
 
 pub struct InterceptorTransport {
     pub inter: Box<dyn MessageInterceptor>,
@@ -32,7 +32,7 @@ impl Transport for InterceptorTransport {
         unreachable!("Cannot call connect on the interceptor transport")
     }
 
-    fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
+    fn message_stream_sink(self) -> (CowStream<CowRpcMessage>, CowSink<CowRpcMessage>) {
         let sink = Box::pin(InterceptorSink {
             inter: self.inter.clone_boxed(),
         });
@@ -46,7 +46,7 @@ impl Transport for InterceptorTransport {
         self.inter = cb_handler;
     }
 
-    fn set_keep_alive_interval(&mut self, _: Option<Duration>) {
+    fn set_keep_alive_interval(&mut self, _: Duration) {
         // Not supported
     }
 
@@ -65,14 +65,6 @@ impl Transport for InterceptorTransport {
 
 struct InterceptorSink {
     inter: Box<dyn MessageInterceptor>,
-}
-
-impl InterceptorSink {
-    fn new(inter: Box<dyn MessageInterceptor>) -> Self {
-        InterceptorSink {
-            inter
-        }
-    }
 }
 
 impl Sink<CowRpcMessage> for InterceptorSink {
@@ -112,12 +104,6 @@ impl Stream for InterceptorStream {
     type Item = Result<CowRpcMessage>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        unreachable!()
-    }
-}
-
-impl StreamEx for InterceptorStream {
-    fn close_on_keep_alive_timeout(&mut self, close: bool) {
-        // Not supported
+        Poll::Ready(Some(Err(CowRpcError::Internal("Should never be used".to_string()))))
     }
 }

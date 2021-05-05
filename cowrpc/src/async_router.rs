@@ -2,7 +2,7 @@ use super::{CowRpcIdentityType, CowRpcMessage};
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::*;
 use crate::transport::r#async::adaptor::Adaptor;
-use crate::transport::r#async::{CowRpcTransport, CowSink, CowStreamEx, ListenerBuilder, Transport};
+use crate::transport::r#async::{CowRpcTransport, CowSink, ListenerBuilder, Transport};
 use crate::transport::tls::TlsOptions;
 use crate::transport::MessageInterceptor;
 use crate::{proto, CowRpcMessageInterceptor};
@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use {mouscache, rand, std};
+use crate::transport::r#async::CowStream;
 
 pub type RouterMonitor = Receiver<()>;
 
@@ -220,7 +221,9 @@ impl CowRpcRouter {
                     match transport {
                         Ok(transport) => {
                             if let Ok(mut transport) = transport.await {
-                                transport.set_keep_alive_interval(keep_alive_interval.clone());
+                                if let Some(keep_alive_interval) = keep_alive_interval.clone() {
+                                    transport.set_keep_alive_interval(keep_alive_interval);
+                                }
 
                                 if let Err(e) = handle_connection(transport, router).await {
                                     error!("Peer finished with error: {:?}", e);
@@ -598,7 +601,7 @@ pub struct CowRpcRouterPeerSharedInner {
 pub struct CowRpcRouterPeer {
     inner: Arc<CowRpcRouterPeerSharedInner>,
     identity: Arc<SyncRwLock<Option<CowRpcIdentity>>>,
-    reader_stream: CowStreamEx<CowRpcMessage>,
+    reader_stream: CowStream<CowRpcMessage>,
     router: RouterShared,
 }
 
@@ -832,7 +835,6 @@ impl CowRpcRouterPeer {
                 // to request the den identity (except the den itself of course) since a pop-token has been validated.
                 if identity.eq("den") {
                     identity = format!("den{}", self.router.inner.id);
-                    self.reader_stream.close_on_keep_alive_timeout(false);
                 }
 
                 let identity = CowRpcIdentity {

@@ -1,7 +1,7 @@
 use crate::error::CowRpcError;
 use crate::proto::{CowRpcMessage, Message};
 use crate::tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::transport::r#async::{CowSink, CowStreamEx, StreamEx, Transport};
+use crate::transport::r#async::{CowSink, Transport};
 use crate::transport::uri::Uri;
 use crate::transport::{MessageInterceptor, TransportError};
 use async_trait::async_trait;
@@ -15,6 +15,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use crate::transport::r#async::CowStream;
 
 pub struct TcpTransport {
     stream: TcpStream,
@@ -81,7 +82,7 @@ impl Transport for TcpTransport {
         Err(TransportError::InvalidUrl("Unable to resolve hostname".to_string()).into())
     }
 
-    fn message_stream_sink(self) -> (CowStreamEx<CowRpcMessage>, CowSink<CowRpcMessage>) {
+    fn message_stream_sink(self) -> (CowStream<CowRpcMessage>, CowSink<CowRpcMessage>) {
         let (reader, writer) = self.stream.into_split();
 
         let sink = Box::pin(CowMessageSink {
@@ -103,7 +104,7 @@ impl Transport for TcpTransport {
         self.callback_handler = Some(cb_handler)
     }
 
-    fn set_keep_alive_interval(&mut self, _: Option<Duration>) {
+    fn set_keep_alive_interval(&mut self, _: Duration) {
         // Not supported
     }
 
@@ -211,12 +212,6 @@ impl Stream for CowMessageStream {
                 }
             }
         }
-    }
-}
-
-impl StreamEx for CowMessageStream {
-    fn close_on_keep_alive_timeout(&mut self, _close: bool) {
-        // Nothing to do
     }
 }
 

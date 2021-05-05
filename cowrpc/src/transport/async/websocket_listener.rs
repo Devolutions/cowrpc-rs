@@ -139,7 +139,7 @@ impl Listener for WebSocketListener {
 async fn accept_stream(raw_stream: TcpStream, cbh: Option<Box<dyn MessageInterceptor>>) -> Result<WebSocketTransport> {
     match accept_async(raw_stream).await {
         Ok(ws_stream) => {
-            Ok(WebSocketTransport::new(CowWebSocketStream::AcceptStream(ws_stream), cbh))
+            Ok(WebSocketTransport::new_server(CowWebSocketStream::AcceptStream(ws_stream), cbh))
         }
         Err(e) => {
             error!("{:?}", e);
