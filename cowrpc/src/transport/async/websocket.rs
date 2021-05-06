@@ -7,15 +7,12 @@ use crate::transport::r#async::{CowSink, Transport};
 use crate::transport::uri::Uri;
 use crate::transport::{CowRpcTransportError, MessageInterceptor, TransportError};
 
-use async_tungstenite::tungstenite::stream::Mode;
-
 use byteorder::LittleEndian;
 use futures::prelude::*;
 use futures::{ready, FutureExt, SinkExt};
 use parking_lot::Mutex;
 
 use tokio::sync::Mutex as AsyncMutex;
-use url::Url;
 
 use crate::error::{CowRpcError, Result};
 use crate::proto::{CowRpcMessage, Message};
@@ -32,6 +29,7 @@ use std::cmp::min;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use tokio::net::TcpStream;
+use tokio_rustls::rustls;
 
 type WsStream = Pin<Box<dyn Stream<Item = std::result::Result<WsMessage, WsError>> + Send + Sync>>;
 type WsSink = Pin<Box<dyn Sink<WsMessage, Error = WsError> + Send>>;
@@ -146,9 +144,11 @@ impl ServerWebSocketPingUtils {
     }
 }
 
+// TODO: Keep only dyn Stream/Sink
 pub enum CowWebSocketStream {
     ConnectStream(WebSocketStream<ConnectStream>),
     AcceptStream(WebSocketStream<TokioAdapter<TcpStream>>),
+    AcceptTlsStream(WebSocketStream<TokioAdapter<tokio_rustls::server::TlsStream<TcpStream>>>),
 }
 
 pub struct WebSocketTransport {
@@ -184,50 +184,41 @@ impl Transport for WebSocketTransport {
     where
         Self: Sized,
     {
-        let _domain = uri.host().unwrap_or("").to_string();
-        let _url =
-            Url::parse(&uri.to_string()).map_err(|_| crate::error::CowRpcError::Internal("Bad server url".into()))?;
+        // TODO : Remove if not needed
+        let client_config = Arc::new(rustls::ClientConfig::default());
+        let tls_connector = tokio_rustls::TlsConnector::from(client_config);
 
-        let (mut port, _mode) = match uri.scheme() {
-            Some("ws") => (80, Mode::Plain),
-            Some("wss") => (443, Mode::Tls),
-            scheme => {
-                return Err(TransportError::InvalidUrl(format!("Unknown scheme {:?}", scheme)).into());
-            }
-        };
-
-        if let Some(p) = uri.port() {
-            port = p
-        }
-
-        if let Ok(addrs) = uri.get_addrs() {
-            if let Some(addr) = addrs.iter().find(|ip| ip.is_ipv4()) {
-                let _sock_addr = SocketAddr::new(addr.clone(), port);
-
-                match async_tungstenite::tokio::connect_async(uri.to_string()).await {
-                    Ok((stream, _)) => {
-                        return Ok(WebSocketTransport::new(CowWebSocketStream::ConnectStream(stream), None));
-                    }
-                    Err(e) => {
-                        error!("{:?}", e);
-                        return Err(CowRpcError::from(TransportError::UnableToConnect));
-                    }
-                }
+        match async_tungstenite::tokio::connect_async_with_tls_connector(uri.to_string(), Some(tls_connector)).await {
+            Ok((stream, _)) => Ok(WebSocketTransport::new(CowWebSocketStream::ConnectStream(stream), None)),
+            Err(e) => {
+                error!("{:?}", e);
+                Err(CowRpcError::from(TransportError::UnableToConnect))
             }
         }
-
-        Err(TransportError::UnableToConnect.into())
     }
 
     fn message_stream_sink(self) -> (CowStream<CowRpcMessage>, CowSink<CowRpcMessage>) {
         let (sink, stream) = match self.stream {
             CowWebSocketStream::ConnectStream(stream) => {
                 let (sink, stream) = stream.split();
-                (Arc::new(AsyncMutex::new(Box::pin(sink) as WsSink)), Box::pin(stream))
+                (
+                    Arc::new(AsyncMutex::new(Box::pin(sink) as WsSink)),
+                    Box::pin(stream) as WsStream,
+                )
             }
             CowWebSocketStream::AcceptStream(stream) => {
                 let (sink, stream) = stream.split();
-                (Arc::new(AsyncMutex::new(Box::pin(sink) as WsSink)), Box::pin(stream))
+                (
+                    Arc::new(AsyncMutex::new(Box::pin(sink) as WsSink)),
+                    Box::pin(stream) as WsStream,
+                )
+            }
+            CowWebSocketStream::AcceptTlsStream(stream) => {
+                let (sink, stream) = stream.split();
+                (
+                    Arc::new(AsyncMutex::new(Box::pin(sink) as WsSink)),
+                    Box::pin(stream) as WsStream,
+                )
             }
         };
 
@@ -447,6 +438,7 @@ impl Sink<CowRpcMessage> for CowMessageSink {
         let mut stream = ready!(Box::pin(this.sink.lock()).poll_unpin(cx));
         loop {
             if !(this.data_to_send.is_empty()) {
+
                 match ready!(stream.poll_ready_unpin(cx)) {
                     Ok(_) => {
                         let size = min(this.data_to_send.len(), WS_BIN_CHUNK_SIZE);
@@ -454,12 +446,12 @@ impl Sink<CowRpcMessage> for CowMessageSink {
                         match stream.start_send_unpin(WsMessage::Binary(data_to_send)) {
                             Ok(_) => {}
                             Err(e) => {
-                                return Poll::Ready(Err(TransportError::from(e).into()));
+                                return Poll::Ready(Err(e.into()));
                             }
                         }
                     }
                     Err(e) => {
-                        return Poll::Ready(Err(TransportError::from(e).into()));
+                        return Poll::Ready(Err(e.into()));
                     }
                 }
             } else {

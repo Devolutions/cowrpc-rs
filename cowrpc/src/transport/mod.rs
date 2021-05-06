@@ -8,8 +8,6 @@ use crate::error::Result;
 use crate::proto::CowRpcMessage;
 
 pub mod r#async;
-//pub mod sync;
-pub mod tls;
 mod uri;
 
 pub use crate::transport::uri::{Uri, UriError};
@@ -19,9 +17,11 @@ pub enum SupportedProto {
     WebSocket,
 }
 
-// pub trait TransportAdapter: Evented {
-//     fn get_next_message(&self) -> Result<Option<CowRpcMessage>>;
-// }
+/// A set of options for a TLS connection.
+pub struct TlsOptions {
+    pub certificate_file_path: String,
+    pub private_key_file_path: String,
+}
 
 pub trait MessageInjector: Sync {
     fn inject(&self, msg: CowRpcMessage);
@@ -114,12 +114,6 @@ impl fmt::Display for TransportError {
 }
 
 impl std::error::Error for TransportError {}
-
-impl From<::tls_api::Error> for TransportError {
-    fn from(e: ::tls_api::Error) -> Self {
-        TransportError::TlsError(e.to_string())
-    }
-}
 
 impl From<::async_tungstenite::tungstenite::Error> for TransportError {
     fn from(e: ::async_tungstenite::tungstenite::Error) -> Self {

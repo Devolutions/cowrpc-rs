@@ -3,7 +3,6 @@ use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::*;
 use crate::transport::r#async::adaptor::Adaptor;
 use crate::transport::r#async::{CowRpcTransport, CowSink, ListenerBuilder, Transport};
-use crate::transport::tls::TlsOptions;
 use crate::transport::MessageInterceptor;
 use crate::{proto, CowRpcMessageInterceptor};
 use futures::channel::oneshot::{channel, Receiver, Sender};
@@ -18,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::transport::r#async::CowStream;
+use crate::transport::TlsOptions;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use {mouscache, rand, std};
@@ -40,9 +40,9 @@ impl RouterHandle {
 
 const PEER_CONNECTION_GRACE_PERIOD: u64 = 10;
 
-pub const ALLOCATED_COW_ID_SET: &str = "allocated_cow_id";
-pub const COW_ID_RECORDS: &str = "cow_address_records";
-pub const IDENTITY_RECORDS: &str = "identities_records";
+const ALLOCATED_COW_ID_SET: &str = "allocated_cow_id";
+const COW_ID_RECORDS: &str = "cow_address_records";
+const IDENTITY_RECORDS: &str = "identities_records";
 
 type IdentityVerificationCallback = dyn Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>, Option<String>)> + Send + Sync;
 type PeerConnectionCallback = dyn Fn(u32) -> () + Send + Sync;
@@ -51,7 +51,7 @@ pub type PeersAreAliveCallback = dyn Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sy
 
 pub struct CowRpcRouter {
     listener_url: String,
-    listener_tls_options: Option<TlsOptions>,
+    tls_options: Option<TlsOptions>,
     monitor: RouterMonitor,
     shared: RouterShared,
     adaptor: Adaptor,
@@ -66,12 +66,12 @@ struct PeersAreAliveTaskInfo {
 }
 
 impl CowRpcRouter {
-    pub async fn new(url: &str, listener_tls_options: Option<TlsOptions>) -> Result<(CowRpcRouter, RouterHandle)> {
+    pub async fn new(url: &str, tls_options: Option<TlsOptions>) -> Result<(CowRpcRouter, RouterHandle)> {
         let id: u32 = 0;
         let (handle, router_monitor) = channel();
         let router = CowRpcRouter {
             listener_url: url.to_string(),
-            listener_tls_options,
+            tls_options,
             monitor: router_monitor,
             shared: RouterShared::new(id).await,
             adaptor: Adaptor::new(),
@@ -89,13 +89,13 @@ impl CowRpcRouter {
         id: u16,
         cache: Cache,
         url: &str,
-        listener_tls_options: Option<TlsOptions>,
+        tls_options: Option<TlsOptions>,
     ) -> Result<(CowRpcRouter, RouterHandle)> {
         let router_id = u32::from(id) << 16;
         let (handle, router_monitor) = channel();
         let router = CowRpcRouter {
             listener_url: url.to_string(),
-            listener_tls_options,
+            tls_options,
             monitor: router_monitor,
             shared: RouterShared::new2(router_id, cache).await,
             adaptor: Adaptor::new(),
@@ -177,7 +177,7 @@ impl CowRpcRouter {
     pub async fn run(self) -> Result<RouterMonitor> {
         let CowRpcRouter {
             listener_url,
-            listener_tls_options,
+            tls_options,
             monitor,
             shared,
             adaptor,
@@ -192,7 +192,7 @@ impl CowRpcRouter {
             listener_builder = listener_builder.msg_interceptor(interceptor);
         }
 
-        if let Some(tls) = listener_tls_options {
+        if let Some(tls) = tls_options {
             listener_builder = listener_builder.with_ssl(tls);
         }
 

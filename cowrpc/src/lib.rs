@@ -18,8 +18,6 @@ extern crate futures;
 extern crate parking_lot;
 extern crate time;
 extern crate timer;
-extern crate tls_api;
-extern crate tls_api_native_tls;
 extern crate tokio;
 //todo fd remove
 //extern crate tokio_tcp;
@@ -31,7 +29,6 @@ use futures::channel::oneshot::Sender as AsyncSender;
 //use mio_extras::channel::Sender;
 pub use crate::proto::{CowRpcMessage, Message};
 pub use crate::transport::r#async::CowFuture;
-pub use crate::transport::tls::{TlsOptions, TlsOptionsBuilder};
 pub use crate::transport::{CowRpcMessageInterceptor, MessageInjector as CowRpcMessageInjector};
 
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};

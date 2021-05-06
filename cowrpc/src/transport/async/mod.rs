@@ -6,15 +6,19 @@ use futures::prelude::*;
 use super::*;
 use crate::error::CowRpcError;
 
-use crate::transport::tls::TlsOptions;
+use crate::transport::r#async::utils::{load_certs, load_private_key};
+use crate::transport::TlsOptions;
 use crate::CowRpcMessage;
 use async_trait::async_trait;
 use std::pin::Pin;
+use std::sync::Arc;
+use tokio_rustls::{rustls, TlsAcceptor};
 
 pub mod adaptor;
 mod interceptor;
 mod tcp;
 mod tcp_listener;
+mod utils;
 mod websocket;
 mod websocket_listener;
 
@@ -26,11 +30,10 @@ pub type CowSink<T> = Pin<Box<dyn Sink<T, Error = CowRpcError> + Send>>;
 pub trait Listener {
     type TransportInstance: Transport;
 
-    async fn bind(addr: &SocketAddr) -> Result<Self>
+    async fn bind(addr: &SocketAddr, tls_connector: Option<TlsAcceptor>) -> Result<Self>
     where
         Self: Sized;
     async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>>;
-    fn set_tls_options(&mut self, tls_opt: TlsOptions);
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
     fn set_executor_handle(&mut self) {
         /* just drop it */
@@ -143,20 +146,32 @@ impl ListenerBuilder {
             ));
         }
 
-        let interface = match self.interface {
-            Some(ref i) => i,
-            None => {
-                return Err(CowRpcError::Internal(
-                    "Unable to build listener, socket addr".to_string(),
-                ))
-            }
-        };
+        let interface = &self
+            .interface
+            .ok_or_else(|| CowRpcError::Internal("Unable to build listener, socket addr".to_string()))?;
+
+        // Build TLS acceptor if needed
+
+        let mut tls_acceptor = None;
+        if let Some(tls_option) = self.tls_options {
+            let client_no_auth = rustls::NoClientAuth::new();
+            let mut server_config = rustls::ServerConfig::new(client_no_auth);
+            let certs = load_certs(&tls_option.certificate_file_path)?;
+            let priv_key = load_private_key(&tls_option.private_key_file_path)?;
+            server_config
+                .set_single_cert(certs, priv_key)
+                .map_err(|e| CowRpcError::Transport(TransportError::TlsError(e.to_string())))?;
+            let config_ref = Arc::new(server_config);
+            tls_acceptor = Some(TlsAcceptor::from(config_ref));
+        }
+
+        // Build the listener itself
 
         let mut listener = match self.proto {
-            Some(SupportedProto::Tcp) => tcp_listener::TcpListener::bind(interface)
+            Some(SupportedProto::Tcp) => tcp_listener::TcpListener::bind(interface, tls_acceptor)
                 .await
                 .map(|l| CowRpcListener::Tcp(l))?,
-            Some(SupportedProto::WebSocket) => websocket_listener::WebSocketListener::bind(interface)
+            Some(SupportedProto::WebSocket) => websocket_listener::WebSocketListener::bind(interface, tls_acceptor)
                 .await
                 .map(|l| CowRpcListener::WebSocket(l))?,
             _ => {
@@ -165,10 +180,6 @@ impl ListenerBuilder {
                 ));
             }
         };
-
-        if let Some(tls_options) = self.tls_options {
-            listener.set_tls_options(tls_options);
-        }
 
         if let Some(interceptor) = self.interceptor {
             listener.set_msg_interceptor(interceptor);
@@ -208,13 +219,6 @@ impl CowRpcListener {
                     Ok(cow_fut)
                 })) as CowStream<CowFuture<CowRpcTransport>>
             }
-        }
-    }
-
-    pub fn set_tls_options(&mut self, tls_opt: TlsOptions) {
-        match self {
-            CowRpcListener::Tcp(ref mut tcp) => tcp.set_tls_options(tls_opt),
-            CowRpcListener::WebSocket(ref mut ws) => ws.set_tls_options(tls_opt),
         }
     }
 

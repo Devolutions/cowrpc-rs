@@ -2,6 +2,7 @@
 //use mio_extras;
 use crate::proto::*;
 use crate::transport;
+use crate::transport::TransportError;
 use std::fmt;
 use {mouscache, std};
 
@@ -58,15 +59,15 @@ impl From<std::sync::mpsc::TryRecvError> for CowRpcError {
     }
 }
 
-// impl From<mio_extras::channel::SendError<proto::CowRpcMessage>> for CowRpcError {
-//     fn from(error: mio_extras::channel::SendError<proto::CowRpcMessage>) -> Self {
-//         CowRpcError::Internal(format!("mio_extras::channel::SendError: {}", error))
-//     }
-// }
-
 impl From<mouscache::CacheError> for CowRpcError {
     fn from(e: mouscache::CacheError) -> Self {
         CowRpcError::Internal(format!("mouscache::CacheError : {}", e))
+    }
+}
+
+impl From<async_tungstenite::tungstenite::error::Error> for CowRpcError {
+    fn from(e: async_tungstenite::tungstenite::error::Error) -> Self {
+        CowRpcError::Transport(TransportError::from(e))
     }
 }
 
