@@ -7,7 +7,6 @@ extern crate env_logger;
 extern crate tokio;
 
 use cowrpc::async_router::CowRpcRouter;
-use cowrpc::TlsOptionsBuilder;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 
@@ -15,20 +14,18 @@ use futures::FutureExt;
 async fn main() {
     env_logger::init();
 
-    let tls_options = TlsOptionsBuilder::new()
-        .cert_from_pkcs12(include_bytes!("../certs/router.local.pfx"), "")
-        .acceptor()
-        .unwrap();
     //let (router, _router_handle) = CowRpcRouter::new("wss://router.local:12345", Some(tls_options)).await.expect("new router failed");
-    let (mut router, _router_handle) = CowRpcRouter::new("ws://localhost:12346", Some(tls_options))
+    let mut router = CowRpcRouter::new("ws://localhost:12346", None)
         .await
         .expect("new router failed");
 
     router.verify_identity_callback(verify_identity_callback).await;
 
-    if let Err(e) = router.run().await {
+    if let Err(e) = router.start().await {
         error!("Router stopped with error: {}", e);
     }
+
+    futures::future::pending::<()>().await;
 }
 
 fn verify_identity_callback(cow_id: u32, msg: &[u8]) -> BoxFuture<(Vec<u8>, Option<String>)> {

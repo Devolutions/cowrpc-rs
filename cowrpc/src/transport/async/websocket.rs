@@ -438,7 +438,6 @@ impl Sink<CowRpcMessage> for CowMessageSink {
         let mut stream = ready!(Box::pin(this.sink.lock()).poll_unpin(cx));
         loop {
             if !(this.data_to_send.is_empty()) {
-
                 match ready!(stream.poll_ready_unpin(cx)) {
                     Ok(_) => {
                         let size = min(this.data_to_send.len(), WS_BIN_CHUNK_SIZE);

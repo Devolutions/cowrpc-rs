@@ -5,7 +5,6 @@ use crate::transport::r#async::adaptor::Adaptor;
 use crate::transport::r#async::{CowRpcTransport, CowSink, ListenerBuilder, Transport};
 use crate::transport::MessageInterceptor;
 use crate::{proto, CowRpcMessageInterceptor};
-use futures::channel::oneshot::{channel, Receiver, Sender};
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::StreamExt;
@@ -16,27 +15,28 @@ use std::collections::HashMap;
 
 use std::sync::Arc;
 
-use crate::transport::r#async::CowStream;
+use crate::transport::r#async::{CowRpcListener, CowStream};
 use crate::transport::TlsOptions;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use {mouscache, rand, std};
 
-pub type RouterMonitor = Receiver<()>;
-
-pub struct RouterHandle {
-    sender: Sender<()>,
-}
-
-impl RouterHandle {
-    fn new(s: Sender<()>) -> RouterHandle {
-        RouterHandle { sender: s }
-    }
-
-    pub fn exit(self) {
-        let _ = self.sender.send(());
-    }
-}
+// TODO REMOVE
+// pub type RouterMonitor = Receiver<()>;
+//
+// pub struct RouterHandle {
+//     sender: Sender<()>,
+// }
+//
+// impl RouterHandle {
+//     fn new(s: Sender<()>) -> RouterHandle {
+//         RouterHandle { sender: s }
+//     }
+//
+//     pub fn exit(self) {
+//         let _ = self.sender.send(());
+//     }
+// }
 
 const PEER_CONNECTION_GRACE_PERIOD: u64 = 10;
 
@@ -52,7 +52,6 @@ pub type PeersAreAliveCallback = dyn Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sy
 pub struct CowRpcRouter {
     listener_url: String,
     tls_options: Option<TlsOptions>,
-    monitor: RouterMonitor,
     shared: RouterShared,
     adaptor: Adaptor,
     msg_interceptor: Option<Box<dyn MessageInterceptor>>,
@@ -66,13 +65,11 @@ struct PeersAreAliveTaskInfo {
 }
 
 impl CowRpcRouter {
-    pub async fn new(url: &str, tls_options: Option<TlsOptions>) -> Result<(CowRpcRouter, RouterHandle)> {
+    pub async fn new(url: &str, tls_options: Option<TlsOptions>) -> Result<CowRpcRouter> {
         let id: u32 = 0;
-        let (handle, router_monitor) = channel();
         let router = CowRpcRouter {
             listener_url: url.to_string(),
             tls_options,
-            monitor: router_monitor,
             shared: RouterShared::new(id).await,
             adaptor: Adaptor::new(),
             msg_interceptor: None,
@@ -80,23 +77,14 @@ impl CowRpcRouter {
             keep_alive_interval: None,
         };
 
-        let router_handle = RouterHandle::new(handle);
-
-        Ok((router, router_handle))
+        Ok(router)
     }
 
-    pub async fn new2(
-        id: u16,
-        cache: Cache,
-        url: &str,
-        tls_options: Option<TlsOptions>,
-    ) -> Result<(CowRpcRouter, RouterHandle)> {
+    pub async fn new2(id: u16, cache: Cache, url: &str, tls_options: Option<TlsOptions>) -> Result<CowRpcRouter> {
         let router_id = u32::from(id) << 16;
-        let (handle, router_monitor) = channel();
         let router = CowRpcRouter {
             listener_url: url.to_string(),
             tls_options,
-            monitor: router_monitor,
             shared: RouterShared::new2(router_id, cache).await,
             adaptor: Adaptor::new(),
             msg_interceptor: None,
@@ -104,9 +92,7 @@ impl CowRpcRouter {
             keep_alive_interval: None,
         };
 
-        let router_handle = RouterHandle::new(handle);
-
-        Ok((router, router_handle))
+        Ok(router)
     }
 
     pub async fn on_peer_connection_callback<F: 'static + Fn(u32) + Send + Sync>(&mut self, callback: F) {
@@ -174,11 +160,10 @@ impl CowRpcRouter {
         self.shared.inner.id
     }
 
-    pub async fn run(self) -> Result<RouterMonitor> {
+    pub async fn start(self) -> Result<()> {
         let CowRpcRouter {
             listener_url,
             tls_options,
-            monitor,
             shared,
             adaptor,
             msg_interceptor,
@@ -196,51 +181,63 @@ impl CowRpcRouter {
             listener_builder = listener_builder.with_ssl(tls);
         }
 
-        let listener = listener_builder.build().await?;
-
-        let router_shared_clone = shared.clone();
-        tokio::spawn(adaptor.message_stream().for_each(move |msg| {
-            let mut router = router_shared_clone.clone();
-            async move {
-                if let Ok(msg) = msg {
-                    router.process_msg(msg).await;
-                }
-            }
-        }));
+        tokio::spawn(msg_injection_task(adaptor, shared.clone()));
 
         if let Some(task_info) = peers_are_alive_task_info {
             tokio::spawn(peers_are_alive_task(shared.inner.peer_senders.clone(), task_info));
         }
 
-        let router_shared_clone = shared.clone();
-        let incoming = listener.incoming().await;
-        incoming
-            .for_each(move |transport| {
-                let router = router_shared_clone.clone();
-                tokio::spawn(async move {
-                    match transport {
-                        Ok(transport) => {
-                            if let Ok(mut transport) = transport.await {
-                                if let Some(keep_alive_interval) = keep_alive_interval.clone() {
-                                    transport.set_keep_alive_interval(keep_alive_interval);
-                                }
+        tokio::spawn(incoming_task(
+            listener_builder.build().await?,
+            shared,
+            keep_alive_interval,
+        ));
 
-                                if let Err(e) = handle_connection(transport, router).await {
-                                    error!("Peer finished with error: {:?}", e);
-                                }
-                            };
-                        }
-                        Err(e) => {
-                            error!("{}", e);
-                        }
-                    }
-                });
-                future::ready(())
-            })
-            .await;
-
-        Ok(monitor)
+        Ok(())
     }
+}
+
+async fn incoming_task(listener: CowRpcListener, router: RouterShared, keep_alive_interval: Option<Duration>) {
+    let router_shared_clone = router.clone();
+    let incoming = listener.incoming().await;
+    incoming
+        .for_each(move |transport| {
+            let router = router_shared_clone.clone();
+            tokio::spawn(async move {
+                match transport {
+                    Ok(transport) => {
+                        if let Ok(mut transport) = transport.await {
+                            if let Some(keep_alive_interval) = keep_alive_interval.clone() {
+                                transport.set_keep_alive_interval(keep_alive_interval);
+                            }
+
+                            if let Err(e) = handle_connection(transport, router).await {
+                                error!("Peer finished with error: {:?}", e);
+                            }
+                        };
+                    }
+                    Err(e) => {
+                        error!("{}", e);
+                    }
+                }
+            });
+            future::ready(())
+        })
+        .await;
+}
+
+async fn msg_injection_task(adaptor: Adaptor, router: RouterShared) {
+    adaptor
+        .message_stream()
+        .for_each(move |msg| {
+            let mut router_clone = router.clone();
+            async move {
+                if let Ok(msg) = msg {
+                    router_clone.process_msg(msg).await;
+                }
+            }
+        })
+        .await;
 }
 
 async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> Result<()> {

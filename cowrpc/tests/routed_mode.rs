@@ -16,9 +16,7 @@ const HTTP_BIG_REQUEST: &'static [u8] = &[0u8; 5000]; // We don't care what is t
 
 #[tokio::test(threaded_scheduler)]
 async fn router_peers() {
-    tokio::spawn(start_router());
-    // Wait router to be up and running. TODO remove
-    std::thread::sleep(Duration::from_secs(1));
+    start_router().await.expect("router start failed");
 
     let mut server = start_server().await.expect("server start failed");
     let mut client = start_client().await.expect("client start failed");
@@ -28,11 +26,11 @@ async fn router_peers() {
 }
 
 async fn start_router() -> Result<(), CowRpcError> {
-    let (mut router, _router_handle) = CowRpcRouter::new(ROUTER_URL, None).await.expect("new router failed");
+    let mut router = CowRpcRouter::new(ROUTER_URL, None).await.expect("new router failed");
 
     router.verify_identity_callback(verify_identity_callback).await;
 
-    router.run().await?;
+    router.start().await?;
 
     Ok(())
 }
