@@ -6,7 +6,7 @@ extern crate log;
 extern crate env_logger;
 extern crate tokio;
 
-use cowrpc::async_router::CowRpcRouter;
+use cowrpc::router::CowRpcRouter;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 

@@ -3,7 +3,7 @@ extern crate env_logger;
 extern crate log;
 extern crate tls_api;
 
-use cowrpc::async_peer::CowRpcPeer;
+use cowrpc::peer::CowRpcPeer;
 use log::info;
 use std::time::Duration;
 

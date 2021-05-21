@@ -1,6 +1,6 @@
-use cowrpc::async_peer::{CallFuture, CowRpcPeer};
-use cowrpc::async_router::CowRpcRouter;
 use cowrpc::error::CowRpcError;
+use cowrpc::peer::{CallFuture, CowRpcPeer};
+use cowrpc::router::CowRpcRouter;
 use cowrpc::CowRpcCallContext;
 use futures::future::BoxFuture;
 use futures::FutureExt;

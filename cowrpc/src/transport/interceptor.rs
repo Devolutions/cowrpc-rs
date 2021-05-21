@@ -1,8 +1,7 @@
 use crate::error::{CowRpcError, Result};
 use crate::proto::CowRpcMessage;
-use crate::transport::r#async::{CowSink, CowStream, Transport};
 use crate::transport::uri::Uri;
-use crate::transport::{MessageInterceptor, TransportError};
+use crate::transport::{CowSink, CowStream, MessageInterceptor, Transport, TransportError};
 use async_trait::async_trait;
 use futures::prelude::*;
 use std::net::SocketAddr;

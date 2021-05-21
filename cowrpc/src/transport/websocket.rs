@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::transport::r#async::{CowSink, Transport};
+use crate::transport::{CowSink, Transport};
 
 use crate::transport::uri::Uri;
 use crate::transport::{CowRpcTransportError, MessageInterceptor, TransportError};
@@ -16,7 +16,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::error::{CowRpcError, Result};
 use crate::proto::{CowRpcMessage, Message};
-use crate::transport::r#async::CowStream;
+use crate::transport::CowStream;
 use async_trait::async_trait;
 use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
 

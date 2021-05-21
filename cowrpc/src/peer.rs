@@ -1,7 +1,6 @@
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
-use crate::transport::r#async::{CowRpcTransport, CowSink, Transport};
-use crate::transport::Uri;
+use crate::transport::{CowRpcTransport, CowSink, Transport, Uri};
 use crate::{
     proto, transport, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq, CowRpcAsyncResolveReq,
     CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext, CowRpcIdentityType,
@@ -11,7 +10,7 @@ use futures::channel::oneshot::channel;
 use futures::prelude::*;
 use futures::ready;
 
-use crate::transport::r#async::CowStream;
+use crate::transport::CowStream;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::{self, AtomicUsize};

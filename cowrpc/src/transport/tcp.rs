@@ -1,9 +1,8 @@
 use crate::error::CowRpcError;
 use crate::proto::{CowRpcMessage, Message};
 use crate::tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::transport::r#async::{CowSink, CowStream, Transport};
 use crate::transport::uri::Uri;
-use crate::transport::{MessageInterceptor, TransportError};
+use crate::transport::{CowSink, CowStream, MessageInterceptor, Transport, TransportError};
 use async_trait::async_trait;
 use byteorder::{LittleEndian, ReadBytesExt};
 use futures::prelude::*;

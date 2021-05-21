@@ -3,7 +3,7 @@ extern crate env_logger;
 extern crate log;
 extern crate tls_api;
 
-use cowrpc::async_peer::{CallFuture, CowRpcPeer};
+use cowrpc::peer::{CallFuture, CowRpcPeer};
 use cowrpc::CowRpcCallContext;
 
 use log::info;

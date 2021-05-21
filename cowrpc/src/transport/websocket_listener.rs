@@ -1,9 +1,8 @@
 use std::net::SocketAddr;
 
 use crate::error::{CowRpcError, Result};
-use crate::transport::r#async::websocket::{CowWebSocketStream, WebSocketTransport};
-use crate::transport::r#async::{CowFuture, CowStream, Listener};
-use crate::transport::{MessageInterceptor, TransportError};
+use crate::transport::websocket::{CowWebSocketStream, WebSocketTransport};
+use crate::transport::{CowFuture, CowStream, Listener, MessageInterceptor, TransportError};
 use async_trait::async_trait;
 use async_tungstenite::tokio::accept_async;
 

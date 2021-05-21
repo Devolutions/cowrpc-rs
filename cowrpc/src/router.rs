@@ -1,9 +1,8 @@
 use super::{CowRpcIdentityType, CowRpcMessage};
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::*;
-use crate::transport::r#async::adaptor::Adaptor;
-use crate::transport::r#async::{CowRpcTransport, CowSink, ListenerBuilder, Transport};
-use crate::transport::MessageInterceptor;
+use crate::transport::adaptor::Adaptor;
+use crate::transport::{CowRpcTransport, CowSink, ListenerBuilder, MessageInterceptor, Transport};
 use crate::{proto, CowRpcMessageInterceptor};
 use futures::future::BoxFuture;
 use futures::prelude::*;
@@ -15,8 +14,7 @@ use std::collections::HashMap;
 
 use std::sync::Arc;
 
-use crate::transport::r#async::{CowRpcListener, CowStream};
-use crate::transport::TlsOptions;
+use crate::transport::{CowRpcListener, CowStream, TlsOptions};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use {mouscache, rand, std};

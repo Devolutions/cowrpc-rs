@@ -28,15 +28,14 @@ use futures::channel::oneshot::Sender as AsyncSender;
 //use mio::{Events, Poll, PollOpt, Ready, Token};
 //use mio_extras::channel::Sender;
 pub use crate::proto::{CowRpcMessage, Message};
-pub use crate::transport::r#async::CowFuture;
-pub use crate::transport::{CowRpcMessageInterceptor, MessageInjector as CowRpcMessageInjector};
+pub use crate::transport::{CowFuture, CowRpcMessageInterceptor, MessageInjector as CowRpcMessageInjector};
 
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 
-pub mod async_peer;
-pub mod async_router;
 pub mod error;
+pub mod peer;
 mod proto;
+pub mod router;
 pub mod transport;
 
 // const NEW_CONNECTION: Token = Token(1);
