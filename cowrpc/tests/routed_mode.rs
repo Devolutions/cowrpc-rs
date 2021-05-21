@@ -1,6 +1,6 @@
 use cowrpc::error::CowRpcError;
 use cowrpc::peer::{CallFuture, CowRpcPeer};
-use cowrpc::router::CowRpcRouter;
+use cowrpc::router::{CowRpcRouter, RouterHandle};
 use cowrpc::CowRpcCallContext;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -16,23 +16,24 @@ const HTTP_BIG_REQUEST: &'static [u8] = &[0u8; 5000]; // We don't care what is t
 
 #[tokio::test(threaded_scheduler)]
 async fn router_peers() {
-    start_router().await.expect("router start failed");
+    let router_handle = start_router().await.expect("router start failed");
 
     let mut server = start_server().await.expect("server start failed");
     let mut client = start_client().await.expect("client start failed");
 
     client.stop().await.expect("client stop failed");
     server.stop().await.expect("server stop failed");
+    router_handle.stop().await;
 }
 
-async fn start_router() -> Result<(), CowRpcError> {
+async fn start_router() -> Result<RouterHandle, CowRpcError> {
     let mut router = CowRpcRouter::new(ROUTER_URL, None).await.expect("new router failed");
 
     router.verify_identity_callback(verify_identity_callback).await;
 
-    router.start().await?;
+    let router_handle = router.start().await?;
 
-    Ok(())
+    Ok(router_handle)
 }
 
 fn verify_identity_callback(_cow_id: u32, verify_request: &[u8]) -> BoxFuture<(Vec<u8>, Option<String>)> {

@@ -7,34 +7,18 @@ use crate::{proto, CowRpcMessageInterceptor};
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::StreamExt;
-
 use mouscache::{Cache, CacheFunc};
-use parking_lot::RwLock as SyncRwLock;
+use parking_lot::{Mutex as SyncMutex, RwLock as SyncRwLock};
 use std::collections::HashMap;
 
 use std::sync::Arc;
 
 use crate::transport::{CowRpcListener, CowStream, TlsOptions};
+use std::pin::Pin;
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use {mouscache, rand, std};
-
-// TODO REMOVE
-// pub type RouterMonitor = Receiver<()>;
-//
-// pub struct RouterHandle {
-//     sender: Sender<()>,
-// }
-//
-// impl RouterHandle {
-//     fn new(s: Sender<()>) -> RouterHandle {
-//         RouterHandle { sender: s }
-//     }
-//
-//     pub fn exit(self) {
-//         let _ = self.sender.send(());
-//     }
-// }
 
 const PEER_CONNECTION_GRACE_PERIOD: u64 = 10;
 
@@ -46,6 +30,128 @@ type IdentityVerificationCallback = dyn Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>
 type PeerConnectionCallback = dyn Fn(u32) -> () + Send + Sync;
 type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> BoxFuture<'static, ()> + Send + Sync;
 pub type PeersAreAliveCallback = dyn Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync;
+
+#[derive(Clone, PartialEq)]
+pub enum RouterState {
+    Init,
+    Running,
+    Stopping,
+    Stopped,
+}
+
+#[derive(Clone)]
+pub struct RouterHandle {
+    state: Arc<SyncRwLock<RouterState>>,
+    wakers: Arc<SyncMutex<Vec<(RouterState, Waker)>>>,
+}
+
+impl RouterHandle {
+    fn new() -> Self {
+        RouterHandle {
+            state: Arc::new(SyncRwLock::new(RouterState::Init)),
+            wakers: Arc::new(SyncMutex::new(Vec::new())),
+        }
+    }
+
+    pub async fn stop(&self) {
+        self.update_state(RouterState::Stopping);
+        self.wait_state(RouterState::Stopped).await;
+    }
+
+    pub async fn wait(&self) {
+        self.wait_state(RouterState::Stopped).await;
+    }
+
+    fn wait_state(&self, waiting_state: RouterState) -> WaitRouterState {
+        WaitRouterState {
+            registered: false,
+            state: self.clone(),
+            waiting_state: waiting_state,
+        }
+    }
+
+    fn get_state(&self) -> RouterState {
+        self.state.read().clone()
+    }
+
+    fn update_state(&self, new_state: RouterState) {
+        let mut state_writer = self.state.write();
+        let mut wakers = self.wakers.lock();
+
+        let mut i = 0;
+        while i != wakers.len() {
+            let (state, _) = &wakers[i];
+            if *state == new_state {
+                let (_, waker) = wakers.remove(i);
+                waker.wake();
+            } else {
+                i += 1;
+            }
+        }
+
+        *state_writer = new_state;
+    }
+
+    fn register(&mut self, waiting_state: RouterState, waker: Waker) {
+        self.wakers.lock().push((waiting_state, waker));
+    }
+}
+
+pub struct WaitRouterState {
+    state: RouterHandle,
+    waiting_state: RouterState,
+    registered: bool,
+}
+
+impl Future for WaitRouterState {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if !this.registered {
+            this.state.register(this.waiting_state.clone(), cx.waker().clone());
+            this.registered = true;
+        }
+
+        if this.state.get_state() == this.waiting_state {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+struct RouterTask<T, S> {
+    task: Pin<Box<T>>,
+    shutdown: Pin<Box<S>>,
+}
+
+impl<T, S> RouterTask<T, S> {
+    pub fn new(task: T, shutdown: S) -> Self {
+        RouterTask {
+            task: Box::pin(task),
+            shutdown: Box::pin(shutdown),
+        }
+    }
+}
+
+impl<T, S> Future for RouterTask<T, S>
+where
+    T: Future<Output = ()>,
+    S: Future<Output = ()>,
+{
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::as_mut(&mut self.shutdown).poll(cx) {
+            Poll::Ready(()) => Poll::Ready(()),
+            Poll::Pending => match Pin::as_mut(&mut self.task).poll(cx) {
+                Poll::Ready(()) => Poll::Ready(()),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+}
 
 pub struct CowRpcRouter {
     listener_url: String,
@@ -158,7 +264,7 @@ impl CowRpcRouter {
         self.shared.inner.id
     }
 
-    pub async fn start(self) -> Result<()> {
+    pub async fn start(self) -> Result<RouterHandle> {
         let CowRpcRouter {
             listener_url,
             tls_options,
@@ -179,19 +285,35 @@ impl CowRpcRouter {
             listener_builder = listener_builder.with_ssl(tls);
         }
 
-        tokio::spawn(msg_injection_task(adaptor, shared.clone()));
+        let router_handle = RouterHandle::new();
 
-        if let Some(task_info) = peers_are_alive_task_info {
-            tokio::spawn(peers_are_alive_task(shared.inner.peer_senders.clone(), task_info));
-        }
-
-        tokio::spawn(incoming_task(
-            listener_builder.build().await?,
-            shared,
-            keep_alive_interval,
+        tokio::spawn(RouterTask::new(
+            msg_injection_task(adaptor, shared.clone()),
+            router_handle.wait_state(RouterState::Stopping),
         ));
 
-        Ok(())
+        if let Some(task_info) = peers_are_alive_task_info {
+            tokio::spawn(RouterTask::new(
+                peers_are_alive_task(shared.inner.peer_senders.clone(), task_info),
+                router_handle.wait_state(RouterState::Stopping),
+            ));
+        }
+
+        let router_handle_clone = router_handle.clone();
+        tokio::spawn(
+            RouterTask::new(
+                incoming_task(listener_builder.build().await?, shared, keep_alive_interval),
+                router_handle.wait_state(RouterState::Stopping),
+            )
+            .then(|_| async move {
+                // TODO Terminate all connections
+                router_handle_clone.update_state(RouterState::Stopped);
+            }),
+        );
+
+        router_handle.update_state(RouterState::Running);
+
+        Ok(router_handle)
     }
 }
 

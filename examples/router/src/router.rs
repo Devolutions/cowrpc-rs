@@ -21,11 +21,15 @@ async fn main() {
 
     router.verify_identity_callback(verify_identity_callback).await;
 
-    if let Err(e) = router.start().await {
-        error!("Router stopped with error: {}", e);
+    match router.start().await {
+        Ok(handle) => {
+            // Wait forever
+            handle.wait().await;
+        }
+        Err(e) => {
+            error!("Router stopped with error: {}", e);
+        }
     }
-
-    futures::future::pending::<()>().await;
 }
 
 fn verify_identity_callback(cow_id: u32, msg: &[u8]) -> BoxFuture<(Vec<u8>, Option<String>)> {
