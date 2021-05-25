@@ -306,7 +306,6 @@ impl CowRpcRouter {
                 router_handle.wait_state(RouterState::Stopping),
             )
             .then(|_| async move {
-                // TODO Terminate all connections
                 shared.terminate_all_connections().await;
                 router_handle_clone.update_state(RouterState::Stopped);
             }),
@@ -381,11 +380,18 @@ async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> 
         callback(peer.inner.cow_id);
     }
 
-    // TODO : Clean up connection should be called even if peer.run() returns an error. To be validated
-    let (peer_id, identity) = peer.run().await.map_err(|(_, _, error)| error)?;
+    let (peer_id, identity, error) = match peer.run().await {
+        Ok((peer_id, identity)) => (peer_id, identity, None),
+        Err((peer_id, identity, error)) => (peer_id, identity, Some(error)),
+    };
+
     router.clone().clean_up_connection(peer_id, identity).await;
 
-    Ok(())
+    if let Some(err) = error {
+        Err(err)
+    } else {
+        Ok(())
+    }
 }
 
 async fn peers_are_alive_task(

@@ -1,5 +1,3 @@
-//TODO FD REMOVE
-//use mio_extras;
 use crate::proto::*;
 use crate::transport;
 use crate::transport::TransportError;

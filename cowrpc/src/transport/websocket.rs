@@ -144,7 +144,6 @@ impl ServerWebSocketPingUtils {
     }
 }
 
-// TODO: Keep only dyn Stream/Sink
 pub enum CowWebSocketStream {
     ConnectStream(WebSocketStream<ConnectStream>),
     AcceptStream(WebSocketStream<TokioAdapter<TcpStream>>),
@@ -184,7 +183,6 @@ impl Transport for WebSocketTransport {
     where
         Self: Sized,
     {
-        // TODO : Remove if not needed
         let client_config = Arc::new(rustls::ClientConfig::default());
         let tls_connector = tokio_rustls::TlsConnector::from(client_config);
 

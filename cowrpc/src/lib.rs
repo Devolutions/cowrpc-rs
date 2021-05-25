@@ -2,9 +2,6 @@ extern crate bufstream;
 extern crate byteorder;
 extern crate bytes;
 extern crate dns_lookup;
-//TODO FD REMOVE
-//extern crate mio;
-//extern crate mio_extras;
 extern crate rmp;
 extern crate url;
 #[macro_use]
@@ -19,16 +16,10 @@ extern crate parking_lot;
 extern crate time;
 extern crate timer;
 extern crate tokio;
-//todo fd remove
-//extern crate tokio_tcp;
-//extern crate tungstenite;
 
-use futures::channel::oneshot::Sender as AsyncSender;
-//TODO FD REMOVE
-//use mio::{Events, Poll, PollOpt, Ready, Token};
-//use mio_extras::channel::Sender;
 pub use crate::proto::{CowRpcMessage, Message};
 pub use crate::transport::{CowFuture, CowRpcMessageInterceptor, MessageInjector as CowRpcMessageInjector};
+use futures::channel::oneshot::Sender as AsyncSender;
 
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 
