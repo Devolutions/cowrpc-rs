@@ -302,11 +302,12 @@ impl CowRpcRouter {
         let router_handle_clone = router_handle.clone();
         tokio::spawn(
             RouterTask::new(
-                incoming_task(listener_builder.build().await?, shared, keep_alive_interval),
+                incoming_task(listener_builder.build().await?, shared.clone(), keep_alive_interval),
                 router_handle.wait_state(RouterState::Stopping),
             )
             .then(|_| async move {
                 // TODO Terminate all connections
+                shared.terminate_all_connections().await;
                 router_handle_clone.update_state(RouterState::Stopped);
             }),
         );
@@ -380,6 +381,7 @@ async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> 
         callback(peer.inner.cow_id);
     }
 
+    // TODO : Clean up connection should be called even if peer.run() returns an error. To be validated
     let (peer_id, identity) = peer.run().await.map_err(|(_, _, error)| error)?;
     router.clone().clean_up_connection(peer_id, identity).await;
 
@@ -485,19 +487,17 @@ impl RouterShared {
 
                 self.clean_identity(peer_id, peer_identity);
 
-                {
-                    if let Err(e) = self.inner.cache.get_raw_cache().set_rem(ALLOCATED_COW_ID_SET, peer_id) {
-                        error!(
-                            "Unable to remove allocated cow id {:#010X}, got error: {:?}",
-                            peer_id, e
-                        );
-                    }
+                if let Err(e) = self.inner.cache.get_raw_cache().set_rem(ALLOCATED_COW_ID_SET, peer_id) {
+                    error!(
+                        "Unable to remove allocated cow id {:#010X}, got error: {:?}",
+                        peer_id, e
+                    );
                 }
 
                 trace!("Peer {:#010X} removed", peer_id);
             }
             None => {
-                warn!("Unable to remove peer {:#010X}", peer_id);
+                warn!("Peer {:#010X} not found, it can't be removed", peer_id);
             }
         }
     }
@@ -668,6 +668,24 @@ impl RouterShared {
                     );
                 }
             }
+        }
+    }
+
+    async fn terminate_all_connections(&self) {
+        let mut peer_senders = self.inner.peer_senders.write().await;
+
+        for (id, peer_sender) in peer_senders.drain() {
+            let mut header = CowRpcHdr {
+                msg_type: proto::COW_RPC_TERMINATE_MSG_ID,
+                src_id: self.inner.id,
+                dst_id: id,
+                ..Default::default()
+            };
+
+            header.size = header.get_size();
+            header.offset = header.size as u8;
+
+            let _ = peer_sender.send_messages(CowRpcMessage::Terminate(header)).await;
         }
     }
 }
@@ -904,7 +922,7 @@ impl CowRpcRouterPeer {
                 if !hdr.is_response() {
                     self.process_terminate_req(hdr).await?;
                 } else {
-                    error!("CowRpc Protocol Error: Router can't process a response: hdr={:?}", hdr);
+                    self.process_terminate_rsp(hdr).await?;
                 }
             }
 
@@ -1054,6 +1072,14 @@ impl CowRpcRouterPeer {
         Ok(())
     }
 
+    async fn process_terminate_rsp(&mut self, _: CowRpcHdr) -> Result<()> {
+        *self.inner.state.write().await = CowRpcRouterPeerState::Terminated;
+
+        // Close the sink, it will send the close message on websocket
+        self.inner.writer_sink.lock().await.close().await?;
+        Ok(())
+    }
+
     async fn send_handshake_rsp(&mut self, flag: u16) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
@@ -1156,7 +1182,6 @@ impl CowRpcRouterPeer {
 
     async fn send_messages(&mut self, msg: CowRpcMessage) -> Result<()> {
         self.inner.writer_sink.lock().await.send(msg).await
-        // self.inner.writer_sink.lock().start_send(msg).map(|_| ())
     }
 }
 
