@@ -204,7 +204,7 @@ impl CowRpcRouterPeer {
     }
 
     async fn process_verify_req(&mut self, _: CowRpcHdr, msg: CowRpcVerifyMsg, payload: &[u8]) -> Result<()> {
-        let (rsp, identity_opt) = if let Some(ref cb) = *self.router.inner.verify_identity_cb.read().await {
+        let (rsp, identity_opt) = if let Some(ref cb) = *self.router.verify_identity_cb.read().await {
             (**cb)(self.inner.cow_id, payload).await
         } else {
             (b"HTTP/1.1 501 NOT IMPLEMENTED\r\n\r\n".to_vec(), None)
@@ -216,7 +216,7 @@ impl CowRpcRouterPeer {
                 // den is a special case. Only one peer should be identified with den. Nobody should be able
                 // to request the den identity (except the den itself of course) since a pop-token has been validated.
                 if identity.eq("den") {
-                    identity = format!("den{}", self.router.inner.id);
+                    identity = format!("den{}", self.router.id);
                 }
 
                 let identity = CowRpcIdentity {
@@ -224,7 +224,7 @@ impl CowRpcRouterPeer {
                     name: identity.clone(),
                 };
 
-                let cache = &self.router.inner.cache;
+                let cache = &self.router.cache;
                 let cow_id = self.inner.cow_id;
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
@@ -252,7 +252,7 @@ impl CowRpcRouterPeer {
         let mut msg_clone = msg.clone();
 
         {
-            let cache = &self.router.inner.cache;
+            let cache = &self.router.cache;
             if header.is_reverse() {
                 match cache.get_cow_identity(msg.node_id) {
                     Ok(opt) => {
@@ -281,7 +281,7 @@ impl CowRpcRouterPeer {
                     {
                         // FIXME: This is a temporary fix until group identity are implemented, as discussed with fdubois
                         if identity.eq("den") {
-                            identity = format!("den{}", self.router.inner.id);
+                            identity = format!("den{}", self.router.id);
                         }
                         // FIXME: End
                     }
@@ -331,7 +331,7 @@ impl CowRpcRouterPeer {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
-            src_id: self.router.inner.id,
+            src_id: self.router.id,
             dst_id: self.inner.cow_id,
             ..Default::default()
         };
@@ -349,7 +349,7 @@ impl CowRpcRouterPeer {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_REGISTER_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
-            src_id: self.router.inner.id,
+            src_id: self.router.id,
             dst_id: self.inner.cow_id,
             ..Default::default()
         };
@@ -367,7 +367,7 @@ impl CowRpcRouterPeer {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_IDENTIFY_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
-            src_id: self.router.inner.id,
+            src_id: self.router.id,
             dst_id: self.inner.cow_id,
             ..Default::default()
         };
@@ -383,7 +383,7 @@ impl CowRpcRouterPeer {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_VERIFY_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
-            src_id: self.router.inner.id,
+            src_id: self.router.id,
             dst_id: self.inner.cow_id,
             ..Default::default()
         };
@@ -399,7 +399,7 @@ impl CowRpcRouterPeer {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_RESOLVE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
-            src_id: self.router.inner.id,
+            src_id: self.router.id,
             dst_id: self.inner.cow_id,
             ..Default::default()
         };
@@ -415,7 +415,7 @@ impl CowRpcRouterPeer {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_TERMINATE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE,
-            src_id: self.router.inner.id,
+            src_id: self.router.id,
             dst_id: self.inner.cow_id,
             ..Default::default()
         };

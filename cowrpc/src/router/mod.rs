@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use crate::router::router_peer::{CowRpcRouterPeer, CowRpcRouterPeerSender, CowRpcRouterPeerState};
 use crate::transport::{CowRpcListener, TlsOptions};
+use std::ops::Deref;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
@@ -374,7 +375,7 @@ async fn msg_injection_task(adaptor: Adaptor, router: RouterShared) {
     adaptor
         .message_stream()
         .for_each(move |msg| {
-            let mut router_clone = router.clone();
+            let router_clone = router.clone();
             async move {
                 if let Ok(msg) = msg {
                     router_clone.process_msg(msg).await;
@@ -394,13 +395,12 @@ async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> 
 
     router
         .clone()
-        .inner
         .peer_senders
         .write()
         .await
         .insert(peer.get_cow_id(), peer_sender);
 
-    if let Some(ref callback) = &*router.inner.on_peer_connection_callback.read().await {
+    if let Some(ref callback) = &*router.on_peer_connection_callback.read().await {
         callback(peer.get_cow_id());
     }
 
@@ -431,7 +431,7 @@ async fn peers_are_alive_task(
         .await;
 }
 
-pub(crate) struct Inner {
+pub(crate) struct RouterSharedInner {
     id: u32,
     cache: RouterCache,
     peer_senders: Arc<RwLock<HashMap<u32, CowRpcRouterPeerSender>>>,
@@ -441,9 +441,9 @@ pub(crate) struct Inner {
     on_peer_disconnection_callback: RwLock<Option<Box<PeerDisconnectionCallback>>>,
 }
 
-impl Inner {
-    async fn new(id: u32, cache: Cache) -> Inner {
-        Inner {
+impl RouterSharedInner {
+    async fn new(id: u32, cache: Cache) -> RouterSharedInner {
+        RouterSharedInner {
             id,
             cache: RouterCache::new(cache.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
@@ -453,40 +453,27 @@ impl Inner {
             on_peer_disconnection_callback: RwLock::new(None),
         }
     }
-}
 
-#[derive(Clone)]
-pub(crate) struct RouterShared {
-    pub inner: Arc<Inner>,
-}
-
-impl RouterShared {
-    async fn new(id: u32, cache: Cache) -> RouterShared {
-        RouterShared {
-            inner: Arc::new(Inner::new(id, cache).await),
-        }
-    }
-
-    async fn find_sender(&mut self, cow_id: u32) -> Option<CowRpcRouterPeerSenderGuard<'_>> {
-        let peer_senders = self.inner.peer_senders.read().await;
+    async fn find_sender(&self, cow_id: u32) -> Option<CowRpcRouterPeerSenderGuard<'_>> {
+        let peer_senders = self.peer_senders.read().await;
         CowRpcRouterPeerSenderGuard::new(peer_senders, cow_id)
     }
 
-    async fn clean_up_connection(self, peer_id: u32, peer_identity: Option<CowRpcIdentity>) {
+    async fn clean_up_connection(&self, peer_id: u32, peer_identity: Option<CowRpcIdentity>) {
         let peer = {
-            let mut peers = self.inner.peer_senders.write().await;
+            let mut peers = self.peer_senders.write().await;
             peers.remove(&peer_id)
         };
 
         match peer {
             Some(_p) => {
-                if let Some(ref callback) = &*self.inner.on_peer_disconnection_callback.read().await {
+                if let Some(ref callback) = &*self.on_peer_disconnection_callback.read().await {
                     callback(peer_id, peer_identity.clone()).await;
                 }
 
                 self.clean_identity(peer_id, peer_identity);
 
-                if let Err(e) = self.inner.cache.get_raw_cache().set_rem(ALLOCATED_COW_ID_SET, peer_id) {
+                if let Err(e) = self.cache.get_raw_cache().set_rem(ALLOCATED_COW_ID_SET, peer_id) {
                     error!(
                         "Unable to remove allocated cow id {:#010X}, got error: {:?}",
                         peer_id, e
@@ -501,16 +488,16 @@ impl RouterShared {
         }
     }
 
-    async fn process_msg(&mut self, msg: CowRpcMessage) {
+    async fn process_msg(&self, msg: CowRpcMessage) {
         // Forward message to the right peer
         self.forward_msg(msg).await;
     }
 
-    async fn forward_msg(&mut self, msg: CowRpcMessage) {
+    async fn forward_msg(&self, msg: CowRpcMessage) {
         let dst_id = msg.get_dst_id();
 
-        if (dst_id & 0xFFFF_0000) != self.inner.id {
-            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
+        if (dst_id & 0xFFFF_0000) != self.id {
+            if let Some(ref router_sender) = &*self.multi_router_peer.read().await {
                 match router_sender.send_messages(msg.clone()).await {
                     Ok(_) => {
                         return;
@@ -552,8 +539,8 @@ impl RouterShared {
                     // To answer other messages, we just swap src-dst and we set the flag as response + failure.
                     let src_id = msg.get_src_id();
 
-                    if (src_id & 0xFFFF_0000) != self.inner.id {
-                        if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
+                    if (src_id & 0xFFFF_0000) != self.id {
+                        if let Some(ref router_sender) = &*self.multi_router_peer.read().await {
                             let mut msg_clone = msg.clone();
                             msg_clone.swap_src_dst();
                             let flag: u16 = CowRpcErrorCode::Unreachable.into();
@@ -579,7 +566,7 @@ impl RouterShared {
         }
     }
 
-    async fn send_call_result_failure(&mut self, header_received: &CowRpcHdr, msg_received: &CowRpcCallMsg, flag: u16) {
+    async fn send_call_result_failure(&self, header_received: &CowRpcHdr, msg_received: &CowRpcCallMsg, flag: u16) {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_RESULT_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
@@ -599,8 +586,8 @@ impl RouterShared {
 
         let dst_id = header_received.src_id;
 
-        if (dst_id & 0xFFFF_0000) != self.inner.id {
-            if let Some(ref router_sender) = &*self.inner.multi_router_peer.read().await {
+        if (dst_id & 0xFFFF_0000) != self.id {
+            if let Some(ref router_sender) = &*self.multi_router_peer.read().await {
                 let _ = router_sender.send_messages(CowRpcMessage::Result(header, msg, Vec::new()));
             }
         } else {
@@ -618,11 +605,11 @@ impl RouterShared {
 
     fn clean_identity(&self, peer_id: u32, identity: Option<CowRpcIdentity>) {
         if let Some(ref identity) = identity {
-            let res = match self.inner.cache.get_cow_identity_peer_addr(identity) {
+            let res = match self.cache.get_cow_identity_peer_addr(identity) {
                 Ok(opt_cow_id) => {
                     if let Some(cow_id) = opt_cow_id {
                         if cow_id == peer_id {
-                            self.inner.cache.remove_cow_identity(identity, peer_id)
+                            self.cache.remove_cow_identity(identity, peer_id)
                         } else {
                             Err(CowRpcError::Internal(format!(
                                 "Identity {} already belongs to another peer {}",
@@ -630,7 +617,7 @@ impl RouterShared {
                             )))
                         }
                     } else {
-                        self.inner.cache.remove_cow_identity(identity, peer_id)
+                        self.cache.remove_cow_identity(identity, peer_id)
                     }
                 }
                 Err(e) => Err(e),
@@ -651,12 +638,12 @@ impl RouterShared {
     }
 
     async fn terminate_all_connections(&self) {
-        let mut peer_senders = self.inner.peer_senders.write().await;
+        let mut peer_senders = self.peer_senders.write().await;
 
         for (id, peer_sender) in peer_senders.drain() {
             let mut header = CowRpcHdr {
                 msg_type: proto::COW_RPC_TERMINATE_MSG_ID,
-                src_id: self.inner.id,
+                src_id: self.id,
                 dst_id: id,
                 ..Default::default()
             };
@@ -665,6 +652,27 @@ impl RouterShared {
             header.offset = header.size as u8;
 
             let _ = peer_sender.send_messages(CowRpcMessage::Terminate(header)).await;
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RouterShared {
+    inner: Arc<RouterSharedInner>,
+}
+
+impl Deref for RouterShared {
+    type Target = RouterSharedInner;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
+}
+
+impl RouterShared {
+    async fn new(id: u32, cache: Cache) -> RouterShared {
+        RouterShared {
+            inner: Arc::new(RouterSharedInner::new(id, cache).await),
         }
     }
 }
