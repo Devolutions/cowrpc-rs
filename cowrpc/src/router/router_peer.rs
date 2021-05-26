@@ -16,7 +16,7 @@ use std::ops::Deref;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
 pub(crate) struct CowRpcRouterPeer {
-    inner: Arc<CowRpcRouterPeerSharedInner>,
+    inner: Arc<CowRpcRouterPeerSenderInner>,
     identity: Arc<SyncRwLock<Option<CowRpcIdentity>>>,
     reader_stream: CowStream<CowRpcMessage>,
     router: RouterShared,
@@ -29,7 +29,7 @@ impl CowRpcRouterPeer {
         stream: CowStream<CowRpcMessage>,
         router: RouterShared,
     ) -> CowRpcRouterPeer {
-        let inner = Arc::new(CowRpcRouterPeerSharedInner {
+        let inner = Arc::new(CowRpcRouterPeerSenderInner {
             cow_id,
             writer_sink: Mutex::new(sink),
             state: RwLock::new(CowRpcRouterPeerState::Connected),
@@ -49,6 +49,7 @@ impl CowRpcRouterPeer {
         }
     }
 
+    #[inline]
     pub fn get_cow_id(&self) -> u32 {
         self.inner.cow_id
     }
@@ -64,23 +65,23 @@ impl CowRpcRouterPeer {
                     }
                 }
                 Some(Err(e)) => {
-                    return Err((self.inner.cow_id, self.identity.read().clone(), e));
+                    return Err((self.get_cow_id(), self.identity.read().clone(), e));
                 }
                 None => {
-                    return Ok((self.inner.cow_id, self.identity.read().clone()));
+                    return Ok((self.get_cow_id(), self.identity.read().clone()));
                 }
             }
 
             match &*self.inner.state.read().await {
                 CowRpcRouterPeerState::Error => {
                     return Err((
-                        self.inner.cow_id,
+                        self.get_cow_id(),
                         self.identity.read().clone(),
                         CowRpcError::Internal("An error occured while polling the peer connection".to_string()),
                     ));
                 }
                 CowRpcRouterPeerState::Terminated => {
-                    return Ok((self.inner.cow_id, self.identity.read().clone()));
+                    return Ok((self.get_cow_id(), self.identity.read().clone()));
                 }
                 _ => {}
             }
@@ -168,7 +169,8 @@ impl CowRpcRouterPeer {
 
     async fn process_verify_req(&mut self, _: CowRpcHdr, msg: CowRpcVerifyMsg, payload: &[u8]) -> Result<()> {
         let (rsp, identity_opt) = if let Some(ref cb) = *self.router.verify_identity_cb.read().await {
-            (**cb)(self.inner.cow_id, payload).await
+            let cow_id = self.get_cow_id();
+            (**cb)(cow_id, payload).await
         } else {
             (b"HTTP/1.1 501 NOT IMPLEMENTED\r\n\r\n".to_vec(), None)
         };
@@ -188,7 +190,7 @@ impl CowRpcRouterPeer {
                 };
 
                 let cache = &self.router.cache;
-                let cow_id = self.inner.cow_id;
+                let cow_id = self.get_cow_id();
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
                         *self.identity.write() = Some(identity);
@@ -295,7 +297,7 @@ impl CowRpcRouterPeer {
             msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
             src_id: self.router.id,
-            dst_id: self.inner.cow_id,
+            dst_id: self.get_cow_id(),
             ..Default::default()
         };
 
@@ -313,7 +315,7 @@ impl CowRpcRouterPeer {
             msg_type: proto::COW_RPC_REGISTER_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
             src_id: self.router.id,
-            dst_id: self.inner.cow_id,
+            dst_id: self.get_cow_id(),
             ..Default::default()
         };
 
@@ -331,7 +333,7 @@ impl CowRpcRouterPeer {
             msg_type: proto::COW_RPC_IDENTIFY_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
             src_id: self.router.id,
-            dst_id: self.inner.cow_id,
+            dst_id: self.get_cow_id(),
             ..Default::default()
         };
 
@@ -347,7 +349,7 @@ impl CowRpcRouterPeer {
             msg_type: proto::COW_RPC_VERIFY_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
             src_id: self.router.id,
-            dst_id: self.inner.cow_id,
+            dst_id: self.get_cow_id(),
             ..Default::default()
         };
 
@@ -363,7 +365,7 @@ impl CowRpcRouterPeer {
             msg_type: proto::COW_RPC_RESOLVE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
             src_id: self.router.id,
-            dst_id: self.inner.cow_id,
+            dst_id: self.get_cow_id(),
             ..Default::default()
         };
 
@@ -379,7 +381,7 @@ impl CowRpcRouterPeer {
             msg_type: proto::COW_RPC_TERMINATE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE,
             src_id: self.router.id,
-            dst_id: self.inner.cow_id,
+            dst_id: self.get_cow_id(),
             ..Default::default()
         };
 
@@ -395,33 +397,43 @@ impl CowRpcRouterPeer {
     }
 }
 
-pub struct CowRpcRouterPeerSharedInner {
-    cow_id: u32,
-    state: RwLock<CowRpcRouterPeerState>,
-    writer_sink: Mutex<CowSink<CowRpcMessage>>,
-}
-
 pub(crate) struct CowRpcRouterPeerSender {
-    inner: Arc<CowRpcRouterPeerSharedInner>,
+    inner: Arc<CowRpcRouterPeerSenderInner>,
 }
 
 impl CowRpcRouterPeerSender {
     pub(crate) fn new(cow_id: u32, state: CowRpcRouterPeerState, writer_sink: CowSink<CowRpcMessage>) -> Self {
         CowRpcRouterPeerSender {
-            inner: Arc::new(CowRpcRouterPeerSharedInner {
+            inner: Arc::new(CowRpcRouterPeerSenderInner {
                 cow_id,
                 state: RwLock::new(state),
                 writer_sink: Mutex::new(writer_sink),
             }),
         }
     }
+}
 
+impl Deref for CowRpcRouterPeerSender {
+    type Target = CowRpcRouterPeerSenderInner;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
+}
+
+pub struct CowRpcRouterPeerSenderInner {
+    cow_id: u32,
+    state: RwLock<CowRpcRouterPeerState>,
+    writer_sink: Mutex<CowSink<CowRpcMessage>>,
+}
+
+impl CowRpcRouterPeerSenderInner {
     pub(crate) async fn set_connection_error(&self) {
-        *self.inner.state.write().await = CowRpcRouterPeerState::Error;
+        *self.state.write().await = CowRpcRouterPeerState::Error;
     }
 
     pub(crate) async fn send_messages(&self, msg: CowRpcMessage) -> Result<()> {
-        self.inner.writer_sink.lock().await.send(msg).await
+        self.writer_sink.lock().await.send(msg).await
     }
 }
 
