@@ -14,10 +14,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::transport::{CowRpcListener, CowStream, TlsOptions};
+use std::ops::Deref;
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 use {mouscache, rand, std};
 
 const PEER_CONNECTION_GRACE_PERIOD: u64 = 10;
@@ -462,21 +463,9 @@ impl RouterShared {
         }
     }
 
-    #[inline]
-    async fn find_sender_and_then<F, U>(&mut self, cow_id: u32, and_then: F) -> U
-    where
-        F: FnOnce(Option<&CowRpcRouterPeerSender>) -> BoxFuture<'_, U>,
-    {
-        // TODO: We could wrap the guard in a struct and use it.
-        let reader = self.inner.peer_senders.read().await;
-        let sender_opt = reader
-            .iter()
-            .find(|p| p.1.inner.cow_id == cow_id)
-            .map(|(_, peer_s)| peer_s);
-
-        let res = and_then(sender_opt).await;
-
-        res
+    async fn find_sender(&mut self, cow_id: u32) -> Option<CowRpcRouterPeerSenderGuard<'_>> {
+        let peer_senders = self.inner.peer_senders.read().await;
+        CowRpcRouterPeerSenderGuard::new(peer_senders, cow_id)
     }
 
     async fn clean_up_connection(self, peer_id: u32, peer_identity: Option<CowRpcIdentity>) {
@@ -531,23 +520,13 @@ impl RouterShared {
             }
         } else {
             let msg_clone = msg.clone();
-            if self
-                .find_sender_and_then(dst_id, |sender_opt| {
-                    Box::pin(async move {
-                        if let Some(sender_ref) = sender_opt {
-                            if let Err(e) = sender_ref.send_messages(msg_clone).await {
-                                warn!("Send message to peer ID {} failed: {}", dst_id, e);
-                                sender_ref.set_connection_error().await;
-                            } else {
-                                return true;
-                            }
-                        }
-                        false
-                    })
-                })
-                .await
-            {
-                return;
+            if let Some(sender) = self.find_sender(dst_id).await {
+                if let Err(e) = sender.send_messages(msg_clone).await {
+                    warn!("Send message to peer ID {} failed: {}", dst_id, e);
+                    sender.set_connection_error().await;
+                } else {
+                    return;
+                }
             }
         }
 
@@ -579,22 +558,17 @@ impl RouterShared {
                             let _ = router_sender.send_messages(msg_clone);
                         }
                     } else {
-                        self.find_sender_and_then(src_id, |sender_opt| {
-                            Box::pin(async move {
-                                if let Some(sender_ref) = sender_opt {
-                                    let mut msg_clone = msg.clone();
-                                    msg_clone.swap_src_dst();
-                                    let flag: u16 = CowRpcErrorCode::Unreachable.into();
-                                    msg_clone.add_flag(COW_RPC_FLAG_RESPONSE | flag);
+                        if let Some(sender) = self.find_sender(src_id).await {
+                            let mut msg_clone = msg.clone();
+                            msg_clone.swap_src_dst();
+                            let flag: u16 = CowRpcErrorCode::Unreachable.into();
+                            msg_clone.add_flag(COW_RPC_FLAG_RESPONSE | flag);
 
-                                    if let Err(e) = sender_ref.send_messages(msg_clone).await {
-                                        warn!("Send message to peer ID {} failed: {}", src_id, e);
-                                        sender_ref.set_connection_error().await;
-                                    }
-                                }
-                            })
-                        })
-                        .await;
+                            if let Err(e) = sender.send_messages(msg_clone).await {
+                                warn!("Send message to peer ID {} failed: {}", src_id, e);
+                                sender.set_connection_error().await;
+                            }
+                        }
                     }
                 }
             }
@@ -626,20 +600,15 @@ impl RouterShared {
                 let _ = router_sender.send_messages(CowRpcMessage::Result(header, msg, Vec::new()));
             }
         } else {
-            self.find_sender_and_then(dst_id, |sender_opt| {
-                Box::pin(async move {
-                    if let Some(sender_ref) = sender_opt {
-                        if let Err(e) = sender_ref
-                            .send_messages(CowRpcMessage::Result(header, msg, Vec::new()))
-                            .await
-                        {
-                            warn!("Send message to peer ID {} failed: {}", header.src_id, e);
-                            sender_ref.set_connection_error().await;
-                        }
-                    }
-                })
-            })
-            .await;
+            if let Some(sender) = self.find_sender(dst_id).await {
+                if let Err(e) = sender
+                    .send_messages(CowRpcMessage::Result(header, msg, Vec::new()))
+                    .await
+                {
+                    warn!("Send message to peer ID {} failed: {}", header.src_id, e);
+                    sender.set_connection_error().await;
+                }
+            }
         }
     }
 
@@ -757,6 +726,31 @@ impl CowRpcRouterPeerSender {
 
     async fn send_messages(&self, msg: CowRpcMessage) -> Result<()> {
         self.inner.writer_sink.lock().await.send(msg).await
+    }
+}
+
+struct CowRpcRouterPeerSenderGuard<'a> {
+    guard: RwLockReadGuard<'a, HashMap<u32, CowRpcRouterPeerSender>>,
+    key: u32,
+}
+
+impl<'a> CowRpcRouterPeerSenderGuard<'a> {
+    fn new(guard: RwLockReadGuard<'a, HashMap<u32, CowRpcRouterPeerSender>>, key: u32) -> Option<Self> {
+        if guard.get(&key).is_some() {
+            Some(CowRpcRouterPeerSenderGuard { guard, key })
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> Deref for CowRpcRouterPeerSenderGuard<'a> {
+    type Target = CowRpcRouterPeerSender;
+
+    fn deref(&self) -> &Self::Target {
+        self.guard
+            .get(&self.key)
+            .expect("Sender should exist, we validated at guard creation")
     }
 }
 
