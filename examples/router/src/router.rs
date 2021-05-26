@@ -14,7 +14,6 @@ use futures::FutureExt;
 async fn main() {
     env_logger::init();
 
-    //let (router, _router_handle) = CowRpcRouter::new("wss://router.local:12345", Some(tls_options)).await.expect("new router failed");
     let mut router = CowRpcRouter::new("ws://localhost:12346", None)
         .await
         .expect("new router failed");
@@ -27,7 +26,7 @@ async fn main() {
             handle.wait().await;
         }
         Err(e) => {
-            error!("Router stopped with error: {}", e);
+            error!("Router failed to start: {}", e);
         }
     }
 }
