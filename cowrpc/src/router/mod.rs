@@ -30,6 +30,8 @@ const IDENTITY_RECORDS: &str = "identities_records";
 
 const PEER_CONNECTION_GRACE_PERIOD: u64 = 10;
 
+const ROUTER_DEFAULT_PORT: u16 = 10261;
+
 type IdentityVerificationCallback = dyn Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>, Option<String>)> + Send + Sync;
 type PeerConnectionCallback = dyn Fn(u32) -> () + Send + Sync;
 type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> BoxFuture<'static, ()> + Send + Sync;
@@ -157,6 +159,75 @@ where
     }
 }
 
+#[derive(Default)]
+pub struct CowRpcRouterBuilder {
+    id: Option<u16>,
+    cache: Option<Cache>,
+    listener_url: Option<String>,
+    tls_options: Option<TlsOptions>,
+    peers_are_alive_task_info: Option<PeersAreAliveTaskInfo>,
+    keep_alive_interval: Option<Duration>,
+}
+
+impl CowRpcRouterBuilder {
+    pub fn new() -> Self {
+        CowRpcRouterBuilder::default()
+    }
+
+    pub fn id(mut self, id: u16) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    pub fn cache(mut self, cache: Cache) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
+    pub fn listener_url(mut self, listener_url: &str) -> Self {
+        self.listener_url = Some(listener_url.to_owned());
+        self
+    }
+
+    pub fn tls_options(mut self, tls_options: TlsOptions) -> Self {
+        self.tls_options = Some(tls_options);
+        self
+    }
+
+    pub fn peers_are_alive_callback<F: 'static + Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync>(
+        &mut self,
+        interval: Duration,
+        callback: F,
+    ) {
+        self.peers_are_alive_task_info = Some(PeersAreAliveTaskInfo {
+            callback: Box::new(callback),
+            interval,
+        });
+    }
+
+    pub fn keep_alive_interval(mut self, keep_alive_interval: Duration) -> Self {
+        self.keep_alive_interval = Some(keep_alive_interval);
+        self
+    }
+
+    pub async fn build(self) -> CowRpcRouter {
+        let listener_url = self
+            .listener_url
+            .unwrap_or_else(|| format!("ws://0.0.0.0:{}", ROUTER_DEFAULT_PORT));
+        let router_id = u32::from(self.id.unwrap_or(0)) << 16;
+        let cache = self.cache.unwrap_or(mouscache::memory());
+
+        CowRpcRouter {
+            listener_url,
+            tls_options: self.tls_options,
+            shared: RouterShared::new(router_id, cache).await,
+            adaptor: Adaptor::new(),
+            msg_interceptor: None,
+            peers_are_alive_task_info: self.peers_are_alive_task_info,
+            keep_alive_interval: self.keep_alive_interval,
+        }
+    }
+}
 pub struct CowRpcRouter {
     listener_url: String,
     tls_options: Option<TlsOptions>,
@@ -173,36 +244,6 @@ struct PeersAreAliveTaskInfo {
 }
 
 impl CowRpcRouter {
-    pub async fn new(url: &str, tls_options: Option<TlsOptions>) -> Result<CowRpcRouter> {
-        let id: u32 = 0;
-        let router = CowRpcRouter {
-            listener_url: url.to_string(),
-            tls_options,
-            shared: RouterShared::new(id).await,
-            adaptor: Adaptor::new(),
-            msg_interceptor: None,
-            peers_are_alive_task_info: None,
-            keep_alive_interval: None,
-        };
-
-        Ok(router)
-    }
-
-    pub async fn new2(id: u16, cache: Cache, url: &str, tls_options: Option<TlsOptions>) -> Result<CowRpcRouter> {
-        let router_id = u32::from(id) << 16;
-        let router = CowRpcRouter {
-            listener_url: url.to_string(),
-            tls_options,
-            shared: RouterShared::new2(router_id, cache).await,
-            adaptor: Adaptor::new(),
-            msg_interceptor: None,
-            peers_are_alive_task_info: None,
-            keep_alive_interval: None,
-        };
-
-        Ok(router)
-    }
-
     pub async fn on_peer_connection_callback<F: 'static + Fn(u32) + Send + Sync>(&mut self, callback: F) {
         let mut cb = self.shared.inner.on_peer_connection_callback.write().await;
         *cb = Some(Box::new(callback));
@@ -228,10 +269,6 @@ impl CowRpcRouter {
         *cb = Some(Box::new(callback));
     }
 
-    pub fn set_keep_alive_interval(&mut self, interval: Duration) {
-        self.keep_alive_interval = Some(interval);
-    }
-
     pub async fn set_msg_interceptor<T: 'static + Send + Sync + Clone>(
         &mut self,
         interceptor: CowRpcMessageInterceptor<T>,
@@ -241,17 +278,6 @@ impl CowRpcRouter {
         let peer = CowRpcRouterPeerSender::new(0, CowRpcRouterPeerState::Connected, sink);
         *self.shared.inner.multi_router_peer.write().await = Some(peer);
         self.msg_interceptor = Some(Box::new(interceptor));
-    }
-
-    pub fn set_peers_are_alive_callback<F: 'static + Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync>(
-        &mut self,
-        interval: Duration,
-        callback: F,
-    ) {
-        self.peers_are_alive_task_info = Some(PeersAreAliveTaskInfo {
-            callback: Box::new(callback),
-            interval,
-        });
     }
 
     pub fn get_msg_injector(&self) -> Adaptor {
@@ -416,20 +442,7 @@ pub(crate) struct Inner {
 }
 
 impl Inner {
-    async fn new(id: u32) -> Inner {
-        let cache = mouscache::memory();
-        Inner {
-            id,
-            cache: RouterCache::new(cache.clone()),
-            peer_senders: Arc::new(RwLock::new(HashMap::new())),
-            verify_identity_cb: RwLock::new(None),
-            on_peer_connection_callback: RwLock::new(None),
-            multi_router_peer: RwLock::new(None),
-            on_peer_disconnection_callback: RwLock::new(None),
-        }
-    }
-
-    async fn new2(id: u32, cache: Cache) -> Inner {
+    async fn new(id: u32, cache: Cache) -> Inner {
         Inner {
             id,
             cache: RouterCache::new(cache.clone()),
@@ -448,15 +461,9 @@ pub(crate) struct RouterShared {
 }
 
 impl RouterShared {
-    async fn new(id: u32) -> RouterShared {
+    async fn new(id: u32, cache: Cache) -> RouterShared {
         RouterShared {
-            inner: Arc::new(Inner::new(id).await),
-        }
-    }
-
-    async fn new2(id: u32, cache: Cache) -> RouterShared {
-        RouterShared {
-            inner: Arc::new(Inner::new2(id, cache).await),
+            inner: Arc::new(Inner::new(id, cache).await),
         }
     }
 
@@ -660,12 +667,6 @@ impl RouterShared {
             let _ = peer_sender.send_messages(CowRpcMessage::Terminate(header)).await;
         }
     }
-}
-
-#[derive(Clone)]
-struct RouterProc {
-    id: u16,
-    name: String,
 }
 
 #[derive(Clone)]

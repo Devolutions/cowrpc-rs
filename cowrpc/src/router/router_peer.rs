@@ -128,7 +128,7 @@ impl CowRpcRouterPeer {
         match msg {
             CowRpcMessage::Handshake(hdr, msg) => {
                 error!(
-                    "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}",
+                    "CowRpc Protocol Error: Handshake should have been processed at the beginning: hdr={:?} - msg={:?}",
                     hdr, msg
                 );
             }

@@ -6,7 +6,7 @@ extern crate log;
 extern crate env_logger;
 extern crate tokio;
 
-use cowrpc::router::CowRpcRouter;
+use cowrpc::router::CowRpcRouterBuilder;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 
@@ -14,9 +14,10 @@ use futures::FutureExt;
 async fn main() {
     env_logger::init();
 
-    let mut router = CowRpcRouter::new("ws://localhost:12346", None)
-        .await
-        .expect("new router failed");
+    let mut router = CowRpcRouterBuilder::new()
+        .listener_url("ws://localhost:12346")
+        .build()
+        .await;
 
     router.verify_identity_callback(verify_identity_callback).await;
 

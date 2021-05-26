@@ -1,11 +1,10 @@
 use cowrpc::error::CowRpcError;
 use cowrpc::peer::{CallFuture, CowRpcPeer};
-use cowrpc::router::{CowRpcRouter, RouterHandle};
+use cowrpc::router::{CowRpcRouterBuilder, RouterHandle};
 use cowrpc::CowRpcCallContext;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use std::time::Duration;
-
 const ROUTER_URL: &str = "ws://localhost:12346";
 const SERVER_IDENTITY: &str = "server";
 const VERIFY_REQUEST: &'static [u8] = b"GET / HTTP/1.1 \r\nDen_ID: server \r\nDen-Pop-Token: pop_token\r\n";
@@ -27,7 +26,7 @@ async fn router_peers() {
 }
 
 async fn start_router() -> Result<RouterHandle, CowRpcError> {
-    let mut router = CowRpcRouter::new(ROUTER_URL, None).await.expect("new router failed");
+    let mut router = CowRpcRouterBuilder::new().listener_url(ROUTER_URL).build().await;
 
     router.verify_identity_callback(verify_identity_callback).await;
 
