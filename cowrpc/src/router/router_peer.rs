@@ -2,20 +2,18 @@ use super::{CowRpcIdentityType, CowRpcMessage};
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto;
 use crate::proto::*;
-use crate::transport::{CowRpcTransport, CowSink, Transport};
+use crate::transport::CowSink;
 use futures::prelude::*;
 use futures::stream::StreamExt;
-use mouscache::CacheFunc;
 use parking_lot::RwLock as SyncRwLock;
 use std::collections::HashMap;
 
 use std::sync::Arc;
 
-use crate::router::{RouterShared, ALLOCATED_COW_ID_SET};
+use crate::router::RouterShared;
 use crate::transport::CowStream;
 use std::ops::Deref;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
-use {mouscache, rand, std};
 
 pub(crate) struct CowRpcRouterPeer {
     inner: Arc<CowRpcRouterPeerSharedInner>,
@@ -25,6 +23,32 @@ pub(crate) struct CowRpcRouterPeer {
 }
 
 impl CowRpcRouterPeer {
+    pub fn new(
+        cow_id: u32,
+        sink: CowSink<CowRpcMessage>,
+        stream: CowStream<CowRpcMessage>,
+        router: RouterShared,
+    ) -> CowRpcRouterPeer {
+        let inner = Arc::new(CowRpcRouterPeerSharedInner {
+            cow_id,
+            writer_sink: Mutex::new(sink),
+            state: RwLock::new(CowRpcRouterPeerState::Connected),
+        });
+
+        CowRpcRouterPeer {
+            inner,
+            identity: Arc::new(SyncRwLock::new(None)),
+            reader_stream: stream,
+            router,
+        }
+    }
+
+    pub fn get_sender(&self) -> CowRpcRouterPeerSender {
+        CowRpcRouterPeerSender {
+            inner: self.inner.clone(),
+        }
+    }
+
     pub fn get_cow_id(&self) -> u32 {
         self.inner.cow_id
     }
@@ -61,67 +85,6 @@ impl CowRpcRouterPeer {
                 _ => {}
             }
         }
-    }
-
-    pub(crate) async fn handshake(
-        transport: CowRpcTransport,
-        router: RouterShared,
-    ) -> Result<(CowRpcRouterPeer, CowRpcRouterPeerSender)> {
-        let transport = transport;
-        let remote_addr = transport.remote_addr();
-        let (mut reader_stream, writer_sink) = transport.message_stream_sink();
-        let (peer, peer_sender) = match reader_stream.next().await {
-            Some(msg) => match msg? {
-                CowRpcMessage::Handshake(hdr, msg) => {
-                    if !hdr.is_response() {
-                        let flag: u16 = CowRpcErrorCode::Success.into();
-
-                        if hdr.flags & COW_RPC_FLAG_DIRECT != 0 {
-                            return Err(CowRpcError::Internal("Direct mode is not implemented.".to_string()));
-                        } else {
-                            trace!("Client connected from {:?}", remote_addr);
-
-                            let (mut peer, peer_sender) = {
-                                let router = router.clone();
-                                let peer_id = generate_peer_id(&router);
-                                let inner = Arc::new(CowRpcRouterPeerSharedInner {
-                                    cow_id: peer_id,
-                                    writer_sink: Mutex::new(writer_sink),
-                                    state: RwLock::new(CowRpcRouterPeerState::Connected),
-                                });
-
-                                (
-                                    CowRpcRouterPeer {
-                                        inner: inner.clone(),
-                                        identity: Arc::new(SyncRwLock::new(None)),
-                                        reader_stream,
-                                        router,
-                                    },
-                                    CowRpcRouterPeerSender { inner },
-                                )
-                            };
-
-                            peer.send_handshake_rsp(flag).await?;
-
-                            (peer, peer_sender)
-                        }
-                    } else {
-                        return Err(CowRpcError::Proto(format!(
-                            "Router can't process a response: hdr={:?} - msg={:?}",
-                            hdr, msg
-                        )));
-                    }
-                }
-                _ => {
-                    return Err(CowRpcError::Proto(
-                        "First message was not a handshake message, shutting down the connection".to_string(),
-                    ))
-                }
-            },
-            None => return Err(CowRpcError::Proto("Connection was closed before handshake".to_string())),
-        };
-
-        Ok((peer, peer_sender))
     }
 
     async fn process_msg(&mut self, msg: CowRpcMessage) -> Result<()> {
@@ -327,7 +290,7 @@ impl CowRpcRouterPeer {
         Ok(())
     }
 
-    async fn send_handshake_rsp(&mut self, flag: u16) -> Result<()> {
+    pub async fn send_handshake_rsp(&mut self, flag: u16) -> Result<()> {
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_HANDSHAKE_MSG_ID,
             flags: COW_RPC_FLAG_RESPONSE | flag,
@@ -491,31 +454,4 @@ pub(crate) enum CowRpcRouterPeerState {
     Connected,
     Terminated,
     Error,
-}
-
-fn generate_peer_id(router: &RouterShared) -> u32 {
-    loop {
-        let id = rand::random::<u16>();
-
-        // 0 is not accepted as peer_id
-        if id != 0 {
-            let peer_id = router.inner.id | u32::from(id);
-            if let Ok(false) = router
-                .inner
-                .cache
-                .get_raw_cache()
-                .set_ismember(ALLOCATED_COW_ID_SET, peer_id)
-            {
-                if router
-                    .inner
-                    .cache
-                    .get_raw_cache()
-                    .set_add(ALLOCATED_COW_ID_SET, &[peer_id])
-                    .is_ok()
-                {
-                    break peer_id;
-                }
-            }
-        }
-    }
 }

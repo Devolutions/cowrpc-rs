@@ -371,6 +371,33 @@ async fn incoming_task(listener: CowRpcListener, router: RouterShared, keep_aliv
         .await;
 }
 
+fn generate_peer_id(router: &RouterShared) -> u32 {
+    loop {
+        let id = rand::random::<u16>();
+
+        // 0 is not accepted as peer_id
+        if id != 0 {
+            let peer_id = router.inner.id | u32::from(id);
+            if let Ok(false) = router
+                .inner
+                .cache
+                .get_raw_cache()
+                .set_ismember(ALLOCATED_COW_ID_SET, peer_id)
+            {
+                if router
+                    .inner
+                    .cache
+                    .get_raw_cache()
+                    .set_add(ALLOCATED_COW_ID_SET, &[peer_id])
+                    .is_ok()
+                {
+                    break peer_id;
+                }
+            }
+        }
+    }
+}
+
 async fn msg_injection_task(adaptor: Adaptor, router: RouterShared) {
     adaptor
         .message_stream()
@@ -386,9 +413,9 @@ async fn msg_injection_task(adaptor: Adaptor, router: RouterShared) {
 }
 
 async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> Result<()> {
-    let (peer, peer_sender) = tokio::time::timeout(
+    let peer = tokio::time::timeout(
         std::time::Duration::from_secs(PEER_CONNECTION_GRACE_PERIOD),
-        CowRpcRouterPeer::handshake(transport, router.clone()),
+        process_handshake(transport, router.clone()),
     )
     .await
     .map_err(|_| CowRpcError::Internal("timed out".to_string()))??;
@@ -398,7 +425,7 @@ async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> 
         .peer_senders
         .write()
         .await
-        .insert(peer.get_cow_id(), peer_sender);
+        .insert(peer.get_cow_id(), peer.get_sender());
 
     if let Some(ref callback) = &*router.on_peer_connection_callback.read().await {
         callback(peer.get_cow_id());
@@ -416,6 +443,49 @@ async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> 
     } else {
         Ok(())
     }
+}
+
+pub(crate) async fn process_handshake(transport: CowRpcTransport, router: RouterShared) -> Result<CowRpcRouterPeer> {
+    let transport = transport;
+    let remote_addr = transport.remote_addr();
+    let (mut reader_stream, writer_sink) = transport.message_stream_sink();
+    let peer = match reader_stream.next().await {
+        Some(msg) => match msg? {
+            CowRpcMessage::Handshake(hdr, msg) => {
+                if !hdr.is_response() {
+                    let flag: u16 = CowRpcErrorCode::Success.into();
+
+                    if hdr.flags & COW_RPC_FLAG_DIRECT != 0 {
+                        return Err(CowRpcError::Internal("Direct mode is not implemented.".to_string()));
+                    } else {
+                        trace!("Client connected from {:?}", remote_addr);
+
+                        let router = router.clone();
+                        let peer_id = generate_peer_id(&router);
+
+                        let mut peer = CowRpcRouterPeer::new(peer_id, writer_sink, reader_stream, router);
+
+                        peer.send_handshake_rsp(flag).await?;
+
+                        peer
+                    }
+                } else {
+                    return Err(CowRpcError::Proto(format!(
+                        "Router can't process a response: hdr={:?} - msg={:?}",
+                        hdr, msg
+                    )));
+                }
+            }
+            _ => {
+                return Err(CowRpcError::Proto(
+                    "First message was not a handshake message, shutting down the connection".to_string(),
+                ))
+            }
+        },
+        None => return Err(CowRpcError::Proto("Connection was closed before handshake".to_string())),
+    };
+
+    Ok(peer)
 }
 
 async fn peers_are_alive_task(
