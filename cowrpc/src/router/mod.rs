@@ -377,15 +377,9 @@ fn generate_peer_id(router: &RouterShared) -> u32 {
 
         // 0 is not accepted as peer_id
         if id != 0 {
-            let peer_id = router.inner.id | u32::from(id);
-            if let Ok(false) = router
-                .inner
-                .cache
-                .get_raw_cache()
-                .set_ismember(ALLOCATED_COW_ID_SET, peer_id)
-            {
+            let peer_id = router.id | u32::from(id);
+            if let Ok(false) = router.cache.get_raw_cache().set_ismember(ALLOCATED_COW_ID_SET, peer_id) {
                 if router
-                    .inner
                     .cache
                     .get_raw_cache()
                     .set_add(ALLOCATED_COW_ID_SET, &[peer_id])
