@@ -32,11 +32,6 @@ pub type CowFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 pub type CowStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send>>;
 pub type CowSink<T> = Pin<Box<dyn Sink<T, Error = CowRpcError> + Send>>;
 
-pub enum SupportedProto {
-    Tcp,
-    WebSocket,
-}
-
 /// A set of options for a TLS connection.
 pub struct TlsOptions {
     pub certificate_file_path: String,

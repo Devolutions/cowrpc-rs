@@ -9,9 +9,10 @@ use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 
 pub mod error;
 pub mod peer;
-mod proto;
 pub mod router;
-pub mod transport;
+
+mod proto;
+mod transport;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcRole {
@@ -33,7 +34,7 @@ enum CowRpcState {
     Terminate,
 }
 
-pub struct CowRpcAsyncResolveReq {
+struct CowRpcAsyncResolveReq {
     id: usize,
     node_id: Option<u32>,
     name: Option<String>,
@@ -66,13 +67,13 @@ impl CowRpcAsyncResolveRsp {
     }
 }
 
-pub struct CowRpcAsyncVerifyReq {
+struct CowRpcAsyncVerifyReq {
     id: usize,
     call_id: u32,
     tx: Option<AsyncSender<CowRpcAsyncVerifyRsp>>,
 }
 
-pub struct CowRpcAsyncVerifyRsp {
+struct CowRpcAsyncVerifyRsp {
     _error: CowRpcErrorCode,
     pub payload: Vec<u8>,
 }
@@ -87,13 +88,13 @@ impl CowRpcAsyncVerifyRsp {
     }
 }
 
-pub struct CowRpcAsyncHttpReq {
+struct CowRpcAsyncHttpReq {
     id: usize,
     call_id: u32,
     tx: Option<AsyncSender<CowRpcAsyncHttpRsp>>,
 }
 
-pub struct CowRpcAsyncHttpRsp {
+struct CowRpcAsyncHttpRsp {
     _error: CowRpcErrorCode,
     pub http_rsp: Vec<u8>,
 }
@@ -108,7 +109,7 @@ impl CowRpcAsyncHttpRsp {
     }
 }
 
-pub enum CowRpcAsyncReq {
+enum CowRpcAsyncReq {
     Resolve(CowRpcAsyncResolveReq),
     Verify(CowRpcAsyncVerifyReq),
     Http(CowRpcAsyncHttpReq),

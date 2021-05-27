@@ -70,7 +70,7 @@ impl CowRpcPeer {
                     peer
                 }
                 Err(_) => {
-                    return Err(CowRpcError::Proto("Connection attempt timed out".to_string()));
+                    return Err(CowRpcError::Timeout);
                 }
             };
 
