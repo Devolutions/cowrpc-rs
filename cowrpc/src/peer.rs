@@ -69,7 +69,7 @@ impl CowRpcPeer {
                     peer
                 }
                 Err(_) => {
-                    return Err(CowRpcError::Proto(format!("Connection attempt timed out")));
+                    return Err(CowRpcError::Proto("Connection attempt timed out".to_string()));
                 }
             };
 
@@ -380,28 +380,25 @@ impl CowRpcPeerAsyncMsgProcessor {
             .await?;
 
         if let Some(mut req) = req_opt {
-            match req {
-                CowRpcAsyncReq::Verify(ref mut verify_req) => {
-                    if let Err(_e) = verify_req
-                        .tx
-                        .take()
-                        .expect("Cannot Send twice on request oneshot channel")
-                        .send(CowRpcAsyncVerifyRsp {
-                            _error: CowRpcErrorCode::from(header.flags),
-                            payload,
-                        })
-                    {
-                        return Err(CowRpcError::Internal(
-                            "Unable to send verify response through futures oneshot channel".to_string(),
-                        ));
-                    }
+            if let CowRpcAsyncReq::Verify(ref mut verify_req) = req {
+                if let Err(_e) = verify_req
+                    .tx
+                    .take()
+                    .expect("Cannot Send twice on request oneshot channel")
+                    .send(CowRpcAsyncVerifyRsp {
+                        _error: CowRpcErrorCode::from(header.flags),
+                        payload,
+                    })
+                {
+                    return Err(CowRpcError::Internal(
+                        "Unable to send verify response through futures oneshot channel".to_string(),
+                    ));
                 }
-                _ => {} /* Wrong request type, we move to the next one */
             }
 
             Ok(())
         } else {
-            Err(CowRpcError::Internal(format!("Unable to find the matching request")))
+            Err(CowRpcError::Internal("Unable to find the matching request".to_string()))
         }
     }
 
@@ -422,28 +419,25 @@ impl CowRpcPeerAsyncMsgProcessor {
             .await?;
 
         if let Some(mut req) = req_opt {
-            match req {
-                CowRpcAsyncReq::Http(ref mut http_req) => {
-                    if let Err(_e) = http_req
-                        .tx
-                        .take()
-                        .expect("Cannot Send twice on request oneshot channel")
-                        .send(CowRpcAsyncHttpRsp {
-                            _error: CowRpcErrorCode::from(header.flags),
-                            http_rsp,
-                        })
-                    {
-                        return Err(CowRpcError::Internal(
-                            "Unable to send http response through futures oneshot channel".to_string(),
-                        ));
-                    }
+            if let CowRpcAsyncReq::Http(ref mut http_req) = req {
+                if let Err(_e) = http_req
+                    .tx
+                    .take()
+                    .expect("Cannot Send twice on request oneshot channel")
+                    .send(CowRpcAsyncHttpRsp {
+                        _error: CowRpcErrorCode::from(header.flags),
+                        http_rsp,
+                    })
+                {
+                    return Err(CowRpcError::Internal(
+                        "Unable to send http response through futures oneshot channel".to_string(),
+                    ));
                 }
-                _ => {} /* Wrong request type, we move to the next one */
             }
 
             Ok(())
         } else {
-            Err(CowRpcError::Internal(format!("Unable to find the matching request")))
+            Err(CowRpcError::Internal("Unable to find the matching request".to_string()))
         }
     }
 
@@ -509,7 +503,7 @@ impl CowRpcPeerAsyncMsgProcessor {
                             .expect("Cannot Send twice on request oneshot channel")
                             .send(CowRpcAsyncResolveRsp {
                                 node_id: None,
-                                name: msg.identity.as_ref().and_then(|cow_id| Some(cow_id.identity.clone())),
+                                name: msg.identity.as_ref().map(|identity_msg| identity_msg.identity.clone()),
                                 error: CowRpcErrorCode::from(header.flags),
                             })
                         {
@@ -537,14 +531,14 @@ impl CowRpcPeerAsyncMsgProcessor {
                 _ => unreachable!(),
             }
         } else {
-            return Err(CowRpcError::Internal(format!("Unable to find the matching request")));
+            return Err(CowRpcError::Internal("Unable to find the matching request".to_string()));
         }
 
         Ok(())
     }
 
     async fn process_terminate_rsp(&self, _: CowRpcHdr) -> Result<()> {
-        self.inner.transition_to_state(CowRpcState::TERMINATE).await;
+        self.inner.transition_to_state(CowRpcState::Terminate).await;
         Ok(())
     }
 
@@ -627,10 +621,13 @@ impl CowRpcPeerAsyncMsgProcessor {
     }
 
     async fn send_verify_req(&self, call_id: u32, payload: Vec<u8>) -> Result<()> {
+        let src_id = self.inner.get_id().await;
+        let dst_id = self.inner.get_router_id().await;
+
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_VERIFY_MSG_ID,
-            src_id: self.inner.get_id().await,
-            dst_id: self.inner.get_router_id().await,
+            src_id,
+            dst_id,
             ..Default::default()
         };
 
@@ -647,11 +644,14 @@ impl CowRpcPeerAsyncMsgProcessor {
             return Err(CowRpcError::Internal("Wrong parameters".to_string()));
         }
 
+        let src_id = self.inner.get_id().await;
+        let dst_id = self.inner.get_router_id().await;
+
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_RESOLVE_MSG_ID,
             flags: if reverse { proto::COW_RPC_FLAG_REVERSE } else { 0 },
-            src_id: self.inner.get_id().await,
-            dst_id: self.inner.get_router_id().await,
+            src_id,
+            dst_id,
             ..Default::default()
         };
 
@@ -663,7 +663,7 @@ impl CowRpcPeerAsyncMsgProcessor {
         } else {
             node_id = 0;
             identity = Some(CowRpcIdentityMsg {
-                typ: CowRpcIdentityType::UPN,
+                typ: CowRpcIdentityType::Upn,
                 flags: 0,
                 identity: String::from(name.expect("This check has already been done")),
             });
@@ -678,10 +678,13 @@ impl CowRpcPeerAsyncMsgProcessor {
     }
 
     async fn send_terminate_req(&self) -> Result<()> {
+        let src_id = self.inner.get_id().await;
+        let dst_id = self.inner.get_router_id().await;
+
         let mut header = CowRpcHdr {
             msg_type: proto::COW_RPC_TERMINATE_MSG_ID,
-            src_id: self.inner.get_id().await,
-            dst_id: self.inner.get_router_id().await,
+            src_id,
+            dst_id,
             ..Default::default()
         };
 
@@ -738,7 +741,7 @@ impl CowRpcAsyncPeer {
             inner: CowRpcPeerSharedInner {
                 id: Arc::new(RwLock::new(0)),
                 router_id: Arc::new(RwLock::new(0)),
-                state: Arc::new(RwLock::new(CowRpcState::INITIAL)),
+                state: Arc::new(RwLock::new(CowRpcState::Initial)),
                 requests: Arc::new(Mutex::new(Vec::new())),
                 writer_sink: Arc::new(Mutex::new(writer_sink)),
                 on_http_msg_callback: Arc::new(on_http),
@@ -763,7 +766,7 @@ impl CowRpcAsyncPeer {
     }
 
     async fn handshake(&mut self) -> Result<()> {
-        self.inner.transition_to_state(CowRpcState::HANDSHAKE).await;
+        self.inner.transition_to_state(CowRpcState::Handshake).await;
 
         // Send handshake
 
@@ -821,7 +824,7 @@ impl CowRpcAsyncPeer {
             )));
         }
 
-        if self.inner.get_state().await != CowRpcState::HANDSHAKE {
+        if self.inner.get_state().await != CowRpcState::Handshake {
             return Err(crate::error::CowRpcError::Internal(format!(
                 "Handshake response received and state machine has wrong state ({:?})",
                 self.inner.get_state().await
@@ -831,7 +834,7 @@ impl CowRpcAsyncPeer {
         self.inner.set_id(header.dst_id).await;
         self.inner.set_router_id(header.src_id).await;
 
-        self.inner.transition_to_state(CowRpcState::ACTIVE).await;
+        self.inner.transition_to_state(CowRpcState::Active).await;
 
         Ok(())
     }
@@ -845,9 +848,9 @@ impl Stream for CowRpcAsyncPeer {
         match result {
             Some(Err(CowRpcError::Transport(transport::TransportError::ConnectionReset))) => {
                 // We want to check if the error is a disconnection
-                return Poll::Ready(None);
+                Poll::Ready(None)
             }
-            other => return Poll::Ready(other),
+            other => Poll::Ready(other),
         }
     }
 }

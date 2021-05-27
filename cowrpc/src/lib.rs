@@ -28,22 +28,22 @@ pub mod transport;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcRole {
-    PEER,
-    ROUTER,
+    Peer,
+    Router,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcMode {
-    ROUTED,
-    DIRECT,
+    Routed,
+    Direct,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum CowRpcState {
-    INITIAL,
-    HANDSHAKE,
-    ACTIVE,
-    TERMINATE,
+    Initial,
+    Handshake,
+    Active,
+    Terminate,
 }
 
 pub struct CowRpcAsyncResolveReq {
@@ -64,17 +64,17 @@ struct CowRpcAsyncResolveRsp {
 impl CowRpcAsyncResolveRsp {
     fn get_result(&self) -> Result<u32> {
         if self.error == CowRpcErrorCode::Success {
-            return Ok(self.node_id.unwrap());
+            Ok(self.node_id.unwrap())
         } else {
-            return Err(CowRpcError::CowRpcFailure(self.error.clone()));
+            Err(CowRpcError::CowRpcFailure(self.error.clone()))
         }
     }
 
     fn get_reverse_result(&self) -> Result<String> {
         if self.error == CowRpcErrorCode::Success {
-            return Ok(self.name.as_ref().unwrap().clone());
+            Ok(self.name.as_ref().unwrap().clone())
         } else {
-            return Err(CowRpcError::CowRpcFailure(self.error.clone()));
+            Err(CowRpcError::CowRpcFailure(self.error.clone()))
         }
     }
 }
@@ -140,11 +140,11 @@ impl CowRpcAsyncReq {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum CowRpcIdentityType {
     /// Anonymous identity
-    NONE,
+    None,
     /// User Principal Name
-    UPN,
+    Upn,
     /// Server Principal Name
-    SPN,
+    Spn,
 }
 
 impl std::string::ToString for CowRpcIdentityType {
@@ -152,9 +152,9 @@ impl std::string::ToString for CowRpcIdentityType {
         use crate::CowRpcIdentityType::*;
 
         match *self {
-            NONE => "NONE".to_string(),
-            UPN => "UPN".to_string(),
-            SPN => "SPN".to_string(),
+            None => "NONE".to_string(),
+            Upn => "UPN".to_string(),
+            Spn => "SPN".to_string(),
         }
     }
 }
@@ -166,9 +166,9 @@ impl std::str::FromStr for CowRpcIdentityType {
         use crate::CowRpcIdentityType::*;
 
         Ok(match s {
-            "UPN" => UPN,
-            "SPN" => SPN,
-            _ => NONE,
+            "UPN" => Upn,
+            "SPN" => Spn,
+            _ => None,
         })
     }
 }
@@ -176,18 +176,18 @@ impl std::str::FromStr for CowRpcIdentityType {
 impl CowRpcIdentityType {
     pub fn try_from(typ: u8) -> Result<Self> {
         match typ {
-            0 => Ok(CowRpcIdentityType::NONE),
-            1 => Ok(CowRpcIdentityType::UPN),
-            2 => Ok(CowRpcIdentityType::SPN),
+            0 => Ok(CowRpcIdentityType::None),
+            1 => Ok(CowRpcIdentityType::Upn),
+            2 => Ok(CowRpcIdentityType::Spn),
             _ => Err(error::CowRpcError::Proto(format!("Unknown identity type - ({})", typ))),
         }
     }
 
     pub fn into(&self) -> u8 {
         match *self {
-            CowRpcIdentityType::NONE => 0,
-            CowRpcIdentityType::UPN => 1,
-            CowRpcIdentityType::SPN => 2,
+            CowRpcIdentityType::None => 0,
+            CowRpcIdentityType::Upn => 1,
+            CowRpcIdentityType::Spn => 2,
         }
     }
 }

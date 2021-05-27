@@ -1,4 +1,3 @@
-use std;
 use std::any::Any;
 use std::fmt;
 
@@ -62,13 +61,15 @@ impl Clone for Box<dyn MessageInterceptor> {
     }
 }
 
+pub type MessageInspectionCallback<T> = fn(&Box<T>, CowRpcMessage) -> Option<CowRpcMessage>;
+
 pub struct CowRpcMessageInterceptor<T>
 where
     T: Sized + Send + Sync + Clone,
 {
     pub cb_param: Box<T>,
-    pub before_send: Option<fn(&Box<T>, CowRpcMessage) -> Option<CowRpcMessage>>,
-    pub before_recv: Option<fn(&Box<T>, CowRpcMessage) -> Option<CowRpcMessage>>,
+    pub before_send: Option<MessageInspectionCallback<T>>,
+    pub before_recv: Option<MessageInspectionCallback<T>>,
 }
 
 impl<T: Send + Sync> MessageInterceptor for CowRpcMessageInterceptor<T>
@@ -295,11 +296,11 @@ impl ListenerBuilder {
         let mut listener = match self.proto {
             Some(SupportedProto::Tcp) => tcp_listener::TcpListener::bind(interface, tls_acceptor, logger)
                 .await
-                .map(|l| CowRpcListener::Tcp(l))?,
+                .map(CowRpcListener::Tcp)?,
             Some(SupportedProto::WebSocket) => {
                 websocket_listener::WebSocketListener::bind(interface, tls_acceptor, logger)
                     .await
-                    .map(|l| CowRpcListener::WebSocket(l))?
+                    .map(CowRpcListener::WebSocket)?
             }
             _ => {
                 return Err(CowRpcError::Internal(
@@ -341,8 +342,9 @@ impl CowRpcListener {
                 let incoming = ws.incoming().await;
                 Box::pin(futures::StreamExt::map(incoming, |result| {
                     let fut = result?;
-                    let cow_fut = Box::pin(fut.and_then(|transport| future::ok(CowRpcTransport::WebSocket(transport))))
-                        as CowFuture<CowRpcTransport>;
+                    let cow_fut =
+                        Box::pin(fut.and_then(|transport| future::ok(CowRpcTransport::WebSocket(Box::new(transport)))))
+                            as CowFuture<CowRpcTransport>;
                     Ok(cow_fut)
                 })) as CowStream<CowFuture<CowRpcTransport>>
             }
@@ -373,7 +375,7 @@ pub trait Transport {
 
 pub enum CowRpcTransport {
     Tcp(tcp::TcpTransport),
-    WebSocket(websocket::WebSocketTransport),
+    WebSocket(Box<websocket::WebSocketTransport>),
     Interceptor(interceptor::InterceptorTransport),
 }
 
@@ -391,12 +393,10 @@ impl Transport for CowRpcTransport {
     {
         if let Some(scheme) = uri.clone().scheme() {
             match scheme {
-                "tcp" => tcp::TcpTransport::connect(uri, logger)
-                    .await
-                    .map(|transport| CowRpcTransport::Tcp(transport)),
+                "tcp" => tcp::TcpTransport::connect(uri, logger).await.map(CowRpcTransport::Tcp),
                 "ws" | "wss" => websocket::WebSocketTransport::connect(uri, logger)
                     .await
-                    .map(|transport| CowRpcTransport::WebSocket(transport)),
+                    .map(|transport| CowRpcTransport::WebSocket(Box::new(transport))),
                 _ => Err(TransportError::InvalidUrl("Bad scheme provided".to_string()).into()),
             }
         } else {

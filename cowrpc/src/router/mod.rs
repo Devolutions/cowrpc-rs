@@ -34,7 +34,7 @@ const PEER_CONNECTION_GRACE_PERIOD: u64 = 10;
 const ROUTER_DEFAULT_PORT: u16 = 10261;
 
 type IdentityVerificationCallback = dyn Fn(u32, &[u8]) -> BoxFuture<'_, (Vec<u8>, Option<String>)> + Send + Sync;
-type PeerConnectionCallback = dyn Fn(u32) -> () + Send + Sync;
+type PeerConnectionCallback = dyn Fn(u32) + Send + Sync;
 type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> BoxFuture<'static, ()> + Send + Sync;
 pub type PeersAreAliveCallback = dyn Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync;
 
@@ -222,7 +222,7 @@ impl CowRpcRouterBuilder {
             .listener_url
             .unwrap_or_else(|| format!("ws://0.0.0.0:{}", ROUTER_DEFAULT_PORT));
         let router_id = u32::from(self.id.unwrap_or(0)) << 16;
-        let cache = self.cache.unwrap_or(mouscache::memory());
+        let cache = self.cache.unwrap_or_else(mouscache::memory);
         let logger = self
             .logger
             .map(|logger| logger.new(o!("router_id" => format!("{:#010X}", router_id))))
@@ -237,7 +237,7 @@ impl CowRpcRouterBuilder {
             listener_url,
             tls_options: self.tls_options,
             shared: RouterShared::new(router_id, cache, logger.clone()).await,
-            adaptor: Adaptor::new(),
+            adaptor: Adaptor::default(),
             msg_interceptor: None,
             peers_are_alive_task_info: self.peers_are_alive_task_info,
             keep_alive_interval: self.keep_alive_interval,
@@ -375,7 +375,7 @@ async fn incoming_task(listener: CowRpcListener, router: RouterShared, keep_aliv
                 match transport {
                     Ok(transport) => {
                         if let Ok(mut transport) = transport.await {
-                            if let Some(keep_alive_interval) = keep_alive_interval.clone() {
+                            if let Some(keep_alive_interval) = keep_alive_interval {
                                 transport.set_keep_alive_interval(keep_alive_interval);
                             }
 
@@ -520,7 +520,7 @@ async fn peers_are_alive_task(
     let interval = tokio::time::interval(task_info.interval);
     interval
         .for_each(|_| async {
-            let peers: Vec<u32> = peers.read().await.keys().map(|x| x.clone()).collect();
+            let peers: Vec<u32> = peers.read().await.keys().copied().collect();
             (task_info.callback)(&peers).await;
         })
         .await;
@@ -541,7 +541,7 @@ impl RouterSharedInner {
     async fn new(id: u32, cache: Cache, logger: Logger) -> RouterSharedInner {
         RouterSharedInner {
             id,
-            cache: RouterCache::new(cache.clone(), logger.clone()),
+            cache: RouterCache::new(cache, logger.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
             verify_identity_cb: RwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
@@ -646,17 +646,15 @@ impl RouterSharedInner {
 
                             let _ = router_sender.send_messages(msg_clone);
                         }
-                    } else {
-                        if let Some(sender) = self.find_sender(src_id).await {
-                            let mut msg_clone = msg.clone();
-                            msg_clone.swap_src_dst();
-                            let flag: u16 = CowRpcErrorCode::Unreachable.into();
-                            msg_clone.add_flag(COW_RPC_FLAG_RESPONSE | flag);
+                    } else if let Some(sender) = self.find_sender(src_id).await {
+                        let mut msg_clone = msg.clone();
+                        msg_clone.swap_src_dst();
+                        let flag: u16 = CowRpcErrorCode::Unreachable.into();
+                        msg_clone.add_flag(COW_RPC_FLAG_RESPONSE | flag);
 
-                            if let Err(e) = sender.send_messages(msg_clone).await {
-                                warn!(self.logger, "Send message to peer ID {} failed: {}", src_id, e);
-                                sender.set_connection_error().await;
-                            }
+                        if let Err(e) = sender.send_messages(msg_clone).await {
+                            warn!(self.logger, "Send message to peer ID {} failed: {}", src_id, e);
+                            sender.set_connection_error().await;
                         }
                     }
                 }
@@ -688,15 +686,13 @@ impl RouterSharedInner {
             if let Some(ref router_sender) = &*self.multi_router_peer.read().await {
                 let _ = router_sender.send_messages(CowRpcMessage::Result(header, msg, Vec::new()));
             }
-        } else {
-            if let Some(sender) = self.find_sender(dst_id).await {
-                if let Err(e) = sender
-                    .send_messages(CowRpcMessage::Result(header, msg, Vec::new()))
-                    .await
-                {
-                    warn!(self.logger, "Send message to peer ID {} failed: {}", header.src_id, e);
-                    sender.set_connection_error().await;
-                }
+        } else if let Some(sender) = self.find_sender(dst_id).await {
+            if let Err(e) = sender
+                .send_messages(CowRpcMessage::Result(header, msg, Vec::new()))
+                .await
+            {
+                warn!(self.logger, "Send message to peer ID {} failed: {}", header.src_id, e);
+                sender.set_connection_error().await;
             }
         }
     }

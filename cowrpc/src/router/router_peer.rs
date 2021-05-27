@@ -196,8 +196,8 @@ impl CowRpcRouterPeer {
                 }
 
                 let identity = CowRpcIdentity {
-                    typ: CowRpcIdentityType::UPN,
-                    name: identity.clone(),
+                    typ: CowRpcIdentityType::Upn,
+                    name: identity,
                 };
 
                 let cache = &self.router.cache;
@@ -234,7 +234,7 @@ impl CowRpcRouterPeer {
                     Ok(opt) => {
                         if let Some(identity) = opt {
                             let iden = CowRpcIdentity {
-                                typ: CowRpcIdentityType::UPN,
+                                typ: CowRpcIdentityType::Upn,
                                 name: identity,
                             };
                             msg_clone.identity = Some(CowRpcIdentityMsg::from(iden));
@@ -250,33 +250,31 @@ impl CowRpcRouterPeer {
                 }
 
                 flag |= COW_RPC_FLAG_REVERSE;
-            } else {
-                if let Some(identity_to_resolve) = msg.identity {
-                    let mut identity = identity_to_resolve.identity;
+            } else if let Some(identity_to_resolve) = msg.identity {
+                let mut identity = identity_to_resolve.identity;
 
-                    {
-                        // FIXME: This is a temporary fix until group identity are implemented, as discussed with fdubois
-                        if identity.eq("den") {
-                            identity = format!("den{}", self.router.id);
-                        }
-                        // FIXME: End
+                {
+                    // FIXME: This is a temporary fix until group identity are implemented, as discussed with fdubois
+                    if identity.eq("den") {
+                        identity = format!("den{}", self.router.id);
                     }
+                    // FIXME: End
+                }
 
-                    match cache.get_cow_identity_peer_addr(&CowRpcIdentity {
-                        typ: CowRpcIdentityType::NONE,
-                        name: identity.clone(),
-                    }) {
-                        Ok(Some(node_id)) => {
-                            msg_clone.node_id = node_id;
-                            flag = CowRpcErrorCode::Success.into();
-                        }
-                        Err(e) => {
-                            error!(self.logger, "Cache returned an error: {:?}", e);
-                            flag = CowRpcErrorCode::NotFound.into();
-                        }
-                        _ => {
-                            flag = CowRpcErrorCode::NotFound.into();
-                        }
+                match cache.get_cow_identity_peer_addr(&CowRpcIdentity {
+                    typ: CowRpcIdentityType::None,
+                    name: identity,
+                }) {
+                    Ok(Some(node_id)) => {
+                        msg_clone.node_id = node_id;
+                        flag = CowRpcErrorCode::Success.into();
+                    }
+                    Err(e) => {
+                        error!(self.logger, "Cache returned an error: {:?}", e);
+                        flag = CowRpcErrorCode::NotFound.into();
+                    }
+                    _ => {
+                        flag = CowRpcErrorCode::NotFound.into();
                     }
                 }
             }

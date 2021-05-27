@@ -15,14 +15,16 @@ pub struct Adaptor {
     waker: Arc<Mutex<Option<Waker>>>, //current_task: Arc<Mutex<Option<Task>>>,
 }
 
-impl Adaptor {
-    pub fn new() -> Adaptor {
+impl Default for Adaptor {
+    fn default() -> Self {
         Adaptor {
             messages: Arc::new(Mutex::new(VecDeque::new())),
             waker: Arc::new(Mutex::new(None)),
         }
     }
+}
 
+impl Adaptor {
     pub fn message_stream(&self) -> CowStream<CowRpcMessage> {
         Box::pin(AdaptorStream {
             messages: self.messages.clone(),
@@ -67,7 +69,7 @@ impl Stream for AdaptorStream {
             return Poll::Pending;
         }
 
-        let msg = messages.pop_front().map(|msg| Ok(msg));
+        let msg = messages.pop_front().map(Ok);
         Poll::Ready(msg)
     }
 }

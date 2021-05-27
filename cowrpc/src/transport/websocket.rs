@@ -37,7 +37,7 @@ type WsSink = Pin<Box<dyn Sink<WsMessage, Error = WsError> + Send>>;
 
 const PING_INTERVAL: u64 = 60;
 const PING_TIMEOUT: u64 = 15;
-const WS_PING_PAYLOAD: &'static [u8] = b"";
+const WS_PING_PAYLOAD: &[u8] = b"";
 const WS_BIN_CHUNK_SIZE: usize = 4096;
 
 struct WsPingConfig {
@@ -89,15 +89,14 @@ impl ServerWebSocketPingUtils {
 
         let mut send_ping = self.send_ping.lock();
         if *send_ping {
-            if let Ok(_) = self.send_ping(waker) {
-                *send_ping = false;
-            }
+            self.send_ping(waker);
+            *send_ping = false;
         }
 
         Ok(())
     }
 
-    fn send_ping(&self, waker: Waker) -> Result<()> {
+    fn send_ping(&self, waker: Waker) {
         let ping_utils = self.clone();
         let logger = self.logger.clone();
 
@@ -123,7 +122,7 @@ impl ServerWebSocketPingUtils {
                     if *ping_utils.waiting_pong.lock() {
                         *ping_utils.ping_expired.lock() = true;
                         waker.clone().wake();
-                        return ();
+                        return;
                     }
 
                     tokio::time::delay_until(next_ping).await;
@@ -138,8 +137,6 @@ impl ServerWebSocketPingUtils {
                 }
             }
         });
-
-        Ok(())
     }
 
     fn pong_received(&self) {
@@ -340,13 +337,10 @@ impl Stream for CowMessageStream {
                     this.data_received = v;
 
                     if let Some(ref mut interceptor) = this.callback_handler {
-                        match interceptor.before_recv(msg) {
-                            Some(msg) => {
-                                debug!(this.logger, "<< {}", msg.get_msg_info());
-                                return Poll::Ready(Some(Ok(msg)));
-                            }
-                            None => {}
-                        };
+                        if let Some(msg) = interceptor.before_recv(msg) {
+                            debug!(this.logger, "<< {}", msg.get_msg_info());
+                            return Poll::Ready(Some(Ok(msg)));
+                        }
                     } else {
                         debug!(this.logger, "<< {}", msg.get_msg_info());
                         return Poll::Ready(Some(Ok(msg)));
@@ -376,13 +370,10 @@ impl Stream for CowMessageStream {
                                 this.data_received = v;
 
                                 if let Some(ref mut interceptor) = this.callback_handler {
-                                    match interceptor.before_recv(msg) {
-                                        Some(msg) => {
-                                            debug!(this.logger, "<< {}", msg.get_msg_info());
-                                            return Poll::Ready(Some(Ok(msg)));
-                                        }
-                                        None => {}
-                                    };
+                                    if let Some(msg) = interceptor.before_recv(msg) {
+                                        debug!(this.logger, "<< {}", msg.get_msg_info());
+                                        return Poll::Ready(Some(Ok(msg)));
+                                    }
                                 } else {
                                     debug!(this.logger, "<< {}", msg.get_msg_info());
                                     return Poll::Ready(Some(Ok(msg)));
@@ -440,7 +431,7 @@ impl CowMessageSink {
         logger: Logger,
     ) -> Self {
         CowMessageSink {
-            sink: sink,
+            sink,
             data_to_send: Vec::new(),
             callback_handler,
             logger,

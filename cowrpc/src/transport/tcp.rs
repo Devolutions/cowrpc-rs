@@ -141,13 +141,10 @@ impl Stream for CowMessageStream {
                     this.data_received = v;
 
                     if let Some(ref mut interceptor) = this.callback_handler {
-                        match interceptor.before_recv(msg) {
-                            Some(msg) => {
-                                debug!(this.logger, "<< {}", msg.get_msg_info());
-                                return Poll::Ready(Some(Ok(msg)));
-                            }
-                            None => {}
-                        };
+                        if let Some(msg) = interceptor.before_recv(msg) {
+                            debug!(this.logger, "<< {}", msg.get_msg_info());
+                            return Poll::Ready(Some(Ok(msg)));
+                        }
                     } else {
                         debug!(this.logger, "<< {}", msg.get_msg_info());
                         return Poll::Ready(Some(Ok(msg)));
@@ -183,13 +180,10 @@ impl Stream for CowMessageStream {
                             this.data_received = v;
 
                             if let Some(ref mut interceptor) = this.callback_handler {
-                                match interceptor.before_recv(msg) {
-                                    Some(msg) => {
-                                        debug!(this.logger, "<< {}", msg.get_msg_info());
-                                        return Poll::Ready(Some(Ok(msg)));
-                                    }
-                                    None => {}
-                                };
+                                if let Some(msg) = interceptor.before_recv(msg) {
+                                    debug!(this.logger, "<< {}", msg.get_msg_info());
+                                    return Poll::Ready(Some(Ok(msg)));
+                                }
                             } else {
                                 debug!(this.logger, "<< {}", msg.get_msg_info());
                                 return Poll::Ready(Some(Ok(msg)));
