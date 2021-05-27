@@ -435,7 +435,7 @@ async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> 
         process_handshake(transport, router.clone()),
     )
     .await
-    .map_err(|_| CowRpcError::Internal("timed out".to_string()))??;
+    .map_err(|_| CowRpcError::Timeout)??;
 
     router
         .clone()

@@ -1,6 +1,5 @@
 use crate::error::CowRpcError;
 use crate::proto::{CowRpcMessage, Message};
-use crate::tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::transport::{CowSink, CowStream, MessageInterceptor, Transport, TransportError};
 use async_trait::async_trait;
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -12,6 +11,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
 use url::Url;

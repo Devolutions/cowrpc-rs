@@ -1,17 +1,5 @@
-extern crate bufstream;
-extern crate byteorder;
-extern crate bytes;
-extern crate mouscache;
 #[macro_use]
 extern crate mouscache_derive;
-extern crate futures;
-extern crate parking_lot;
-extern crate rand;
-extern crate rmp;
-extern crate time;
-extern crate timer;
-extern crate tokio;
-extern crate url;
 
 pub use crate::proto::{CowRpcMessage, Message};
 pub use crate::transport::{CowFuture, CowRpcMessageInterceptor, MessageInjector as CowRpcMessageInjector};

@@ -139,13 +139,10 @@ impl CowRpcPeer {
             inner_clone.send_verify_req(id as u32, payload).await?;
             let result = tokio::time::timeout(timeout, rx)
                 .await
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
+                .map_err(|_| CowRpcError::Timeout)?;
             match result {
                 Ok(res) => Ok(res.payload),
-                Err(e) => Err(CowRpcError::Internal(format!(
-                    "The receiver has been cancelled, {:?}",
-                    e
-                ))),
+                Err(_) => Err(CowRpcError::Cancel),
             }
         } else {
             Err(CowRpcError::Internal(
@@ -170,7 +167,7 @@ impl CowRpcPeer {
             inner_clone.send_http_req(remote_id, id as u32, http_req).await?;
             let result = tokio::time::timeout(timeout, rx)
                 .await
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
+                .map_err(|_| CowRpcError::Timeout)?;
             match result {
                 Ok(res) => {
                     if res._error == CowRpcErrorCode::Success {
@@ -179,10 +176,7 @@ impl CowRpcPeer {
                         Err(CowRpcError::CowRpcFailure(res._error))
                     }
                 }
-                Err(e) => Err(CowRpcError::Internal(format!(
-                    "The receiver has been cancelled, {:?}",
-                    e
-                ))),
+                Err(_) => Err(CowRpcError::Cancel),
             }
         } else {
             Err(CowRpcError::Internal(
@@ -211,16 +205,13 @@ impl CowRpcPeer {
             inner_clone.send_resolve_req(None, Some(&name), false).await?;
             let result = tokio::time::timeout(timeout, rx)
                 .await
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
+                .map_err(|_| CowRpcError::Timeout)?;
             match result {
                 Ok(res) => match res.get_result() {
                     Ok(r) => Ok(r),
                     Err(e) => Err(e),
                 },
-                Err(e) => Err(CowRpcError::Internal(format!(
-                    "The receiver has been cancelled, {:?}",
-                    e
-                ))),
+                Err(_) => Err(CowRpcError::Cancel),
             }
         } else {
             Err(CowRpcError::Internal(
@@ -247,16 +238,13 @@ impl CowRpcPeer {
             inner_clone.send_resolve_req(Some(node_id), None, true).await?;
             let result = tokio::time::timeout(timeout, rx)
                 .await
-                .map_err(|_| CowRpcError::Internal("timed out".to_string()))?;
+                .map_err(|_| CowRpcError::Timeout)?;
             match result {
                 Ok(res) => match res.get_reverse_result() {
                     Ok(r) => Ok(r),
                     Err(e) => Err(e),
                 },
-                Err(e) => Err(CowRpcError::Internal(format!(
-                    "The receiver has been cancelled, {:?}",
-                    e
-                ))),
+                Err(_) => Err(CowRpcError::Cancel),
             }
         } else {
             Err(CowRpcError::Internal(

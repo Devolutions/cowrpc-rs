@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use futures::prelude::*;
 
-use super::*;
 use crate::error::CowRpcError;
 
 use crate::transport::utils::{load_certs, load_private_key};
