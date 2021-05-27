@@ -110,9 +110,9 @@ pub enum CowRpcErrorCode {
     UnknownError, // Always the last one
 }
 
-impl Into<u16> for CowRpcErrorCode {
-    fn into(self) -> u16 {
-        let mut error_code: u16 = match self {
+impl From<CowRpcErrorCode> for u16 {
+    fn from(error: CowRpcErrorCode) -> Self {
+        let mut error_code: u16 = match error {
             CowRpcErrorCode::Success => 0,
             CowRpcErrorCode::Internal => 1,
             CowRpcErrorCode::Version => 2,
