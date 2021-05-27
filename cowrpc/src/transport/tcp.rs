@@ -1,7 +1,6 @@
 use crate::error::CowRpcError;
 use crate::proto::{CowRpcMessage, Message};
 use crate::tokio::io::{AsyncReadExt, AsyncWriteExt};
-use crate::transport::uri::Uri;
 use crate::transport::{CowSink, CowStream, MessageInterceptor, Transport, TransportError};
 use async_trait::async_trait;
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -15,6 +14,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use url::Url;
 
 pub struct TcpTransport {
     stream: TcpStream,
@@ -36,37 +36,22 @@ impl TcpTransport {
 
 #[async_trait]
 impl Transport for TcpTransport {
-    async fn connect(uri: Uri, logger: Logger) -> Result<Self, CowRpcError>
+    async fn connect(url: Url, logger: Logger) -> Result<Self, CowRpcError>
     where
         Self: Sized,
     {
-        let mut port: u16 = 80;
-        if let Some(p) = uri.port() {
-            port = p
-        }
-
-        if let Ok(addrs) = uri.get_addrs() {
-            for addr in addrs {
-                let sock_addr = SocketAddr::new(addr, port);
-
-                match TcpStream::connect(&sock_addr).await {
-                    Ok(stream) => {
-                        return Ok(TcpTransport {
-                            stream,
-                            callback_handler: None,
-                            connected_at: Instant::now(),
-                            logger: logger.clone(),
-                        });
-                    }
-                    Err(e) => {
-                        error!(logger, "{:?}", e);
-                        return Err(CowRpcError::from(TransportError::UnableToConnect));
-                    }
-                }
+        match TcpStream::connect(&url.to_string()).await {
+            Ok(stream) => Ok(TcpTransport {
+                stream,
+                callback_handler: None,
+                connected_at: Instant::now(),
+                logger: logger.clone(),
+            }),
+            Err(e) => {
+                error!(logger, "{:?}", e);
+                Err(CowRpcError::from(TransportError::UnableToConnect))
             }
         }
-
-        Err(TransportError::InvalidUrl("Unable to resolve hostname".to_string()).into())
     }
 
     fn message_stream_sink(self) -> (CowStream<CowRpcMessage>, CowSink<CowRpcMessage>) {

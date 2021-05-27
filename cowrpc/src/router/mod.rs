@@ -318,7 +318,7 @@ impl CowRpcRouter {
             logger,
         } = self;
 
-        let mut listener_builder = ListenerBuilder::from_uri(&listener_url)?.logger(logger.clone());
+        let mut listener_builder = ListenerBuilder::new(&listener_url).logger(logger.clone());
 
         if let Some(interceptor) = msg_interceptor {
             listener_builder = listener_builder.msg_interceptor(interceptor);

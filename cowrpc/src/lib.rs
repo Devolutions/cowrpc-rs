@@ -1,7 +1,6 @@
 extern crate bufstream;
 extern crate byteorder;
 extern crate bytes;
-extern crate dns_lookup;
 extern crate mouscache;
 #[macro_use]
 extern crate mouscache_derive;

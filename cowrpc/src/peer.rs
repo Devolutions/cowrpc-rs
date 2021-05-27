@@ -1,6 +1,6 @@
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
-use crate::transport::{CowRpcTransport, CowSink, Transport, Uri};
+use crate::transport::{CowRpcTransport, CowSink, Transport};
 use crate::{
     proto, transport, CowRpcAsyncHttpReq, CowRpcAsyncHttpRsp, CowRpcAsyncReq, CowRpcAsyncResolveReq,
     CowRpcAsyncResolveRsp, CowRpcAsyncVerifyReq, CowRpcAsyncVerifyRsp, CowRpcCallContext, CowRpcIdentityType,
@@ -20,6 +20,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
+use url::Url;
 
 pub type CallFuture<T> = Box<dyn Future<Output = std::result::Result<T, ()>> + Unpin + Send>;
 type HttpMsgCallback = dyn Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>> + Send + Sync;
@@ -57,11 +58,11 @@ impl CowRpcPeer {
     pub async fn start(&mut self) -> Result<()> {
         let connection_timeout = self.connection_timeout.unwrap_or_else(|| Duration::from_secs(30));
 
-        let uri = Uri::from_str(&self.url).map_err(|e| CowRpcError::Internal(e.to_string()))?;
+        let url = Url::from_str(&self.url).map_err(|e| CowRpcError::Internal(format!("Invalid URL: {}", e)))?;
         let logger = self.logger.clone();
 
         let mut peer =
-            match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri, logger.clone())).await {
+            match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(url, logger.clone())).await {
                 Ok(connect_result) => {
                     let transport = connect_result?;
                     let mut peer = CowRpcAsyncPeer::new(transport, self.on_http_msg_callback.take());
@@ -89,7 +90,6 @@ impl CowRpcPeer {
                                     error!(logger_clone, "Msg processor got an error : {:?}", e);
                                 }
                             }
-                            future::ready(())
                         });
                     }
                     Some(Err(e)) => {

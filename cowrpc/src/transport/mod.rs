@@ -17,9 +17,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio_rustls::{rustls, TlsAcceptor};
 
-mod uri;
-pub use crate::transport::uri::{Uri, UriError};
 use slog::{o, Drain, Logger};
+use std::str::FromStr;
+use url::Url;
 
 pub mod adaptor;
 mod interceptor;
@@ -109,7 +109,6 @@ pub type CowRpcTransportError = TransportError;
 
 #[derive(Debug)]
 pub enum TransportError {
-    InvalidUri(uri::UriError),
     InvalidUrl(String),
     InvalidProtocol(String),
     PortAlreadyInUse(String),
@@ -124,7 +123,6 @@ pub enum TransportError {
 impl fmt::Display for TransportError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TransportError::InvalidUri(ref e) => e.fmt(f),
             TransportError::InvalidUrl(ref desc) => write!(f, "Invalid url: {}", desc),
             TransportError::InvalidProtocol(ref desc) => write!(f, "Invalid protocol: {}", desc),
             TransportError::PortAlreadyInUse(ref desc) => write!(f, "Port already in use: {}", desc),
@@ -150,7 +148,7 @@ impl From<::async_tungstenite::tungstenite::Error> for TransportError {
 pub trait Listener {
     type TransportInstance: Transport;
 
-    async fn bind(addr: &SocketAddr, tls_connector: Option<TlsAcceptor>, logger: Logger) -> Result<Self>
+    async fn bind(interface: &SocketAddr, tls_connector: Option<TlsAcceptor>, logger: Logger) -> Result<Self>
     where
         Self: Sized;
     async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>>;
@@ -162,87 +160,18 @@ pub trait Listener {
 
 #[derive(Default)]
 pub struct ListenerBuilder {
-    interface: Option<SocketAddr>,
-    proto: Option<SupportedProto>,
+    interface: String,
     tls_options: Option<TlsOptions>,
     interceptor: Option<Box<dyn MessageInterceptor>>,
-    needs_tls: bool,
     logger: Option<Logger>,
 }
 
 impl ListenerBuilder {
-    pub fn new() -> Self {
-        ListenerBuilder::default()
-    }
-
-    pub fn from_uri(uri: &str) -> Result<Self> {
-        let uri: Uri = uri
-            .parse()
-            .map_err(|parse_error: crate::transport::uri::UriError| CowRpcError::Internal(parse_error.to_string()))?;
-
-        let needs_tls;
-
-        let (mut port, proto) = match uri.scheme() {
-            Some("tcp") => {
-                needs_tls = false;
-                (80, SupportedProto::Tcp)
-            }
-            Some("tls") => {
-                needs_tls = true;
-                (443, SupportedProto::Tcp)
-            }
-            Some("ws") => {
-                needs_tls = false;
-                (80, SupportedProto::WebSocket)
-            }
-            Some("wss") => {
-                needs_tls = true;
-                (443, SupportedProto::WebSocket)
-            }
-            Some(scheme) => {
-                return Err(CowRpcError::Transport(TransportError::InvalidProtocol(String::from(
-                    scheme,
-                ))));
-            }
-            None => {
-                return Err(CowRpcError::Transport(TransportError::InvalidProtocol(String::from(
-                    "No protocol specified",
-                ))));
-            }
-        };
-
-        let ip = {
-            if let Ok(addrs) = uri.get_addrs() {
-                addrs[0]
-            } else {
-                return Err(TransportError::InvalidUrl(String::from("No local ipAddr specified")).into());
-            }
-        };
-
-        if let Some(p) = uri.port() {
-            port = p
+    pub fn new(interface: &str) -> Self {
+        ListenerBuilder {
+            interface: interface.to_string(),
+            ..Default::default()
         }
-
-        let sock_addr = SocketAddr::new(ip, port);
-
-        Ok(ListenerBuilder {
-            interface: Some(sock_addr),
-            proto: Some(proto),
-            tls_options: None,
-            interceptor: None,
-            needs_tls,
-            logger: None,
-        })
-    }
-
-    pub fn protocol(mut self, proto: SupportedProto) -> Self {
-        self.proto = Some(proto);
-        self
-    }
-
-    pub fn listen_on(mut self, addr: SocketAddr) -> Self {
-        self.interface = Some(addr);
-        self
     }
 
     pub fn msg_interceptor(mut self, inter: Box<dyn MessageInterceptor>) -> Self {
@@ -261,7 +190,9 @@ impl ListenerBuilder {
     }
 
     pub async fn build(self) -> Result<CowRpcListener> {
-        if self.needs_tls && self.tls_options.is_none() {
+        let url = Url::from_str(&self.interface).map_err(|e| CowRpcError::Internal(format!("Invalid URL: {}", e)))?;
+
+        if url.scheme() == "tls" || url.scheme() == "wss" && self.tls_options.is_none() {
             return Err(CowRpcError::Internal(
                 "Unable to build listener, the configuration loaded needed tls options but none where given"
                     .to_string(),
@@ -271,10 +202,6 @@ impl ListenerBuilder {
         let logger = self
             .logger
             .unwrap_or_else(|| slog::Logger::root(slog_stdlog::StdLog.fuse(), o!()));
-
-        let interface = &self
-            .interface
-            .ok_or_else(|| CowRpcError::Internal("Unable to build listener, socket addr".to_string()))?;
 
         // Build TLS acceptor if needed
 
@@ -293,15 +220,16 @@ impl ListenerBuilder {
 
         // Build the listener itself
 
-        let mut listener = match self.proto {
-            Some(SupportedProto::Tcp) => tcp_listener::TcpListener::bind(interface, tls_acceptor, logger)
+        let addrs = url
+            .socket_addrs(|| None)
+            .map_err(|e| CowRpcTransportError::InvalidUrl(format!("Invalid URL: {}", e)))?;
+        let mut listener = match url.scheme() {
+            "tcp" | "tls" => tcp_listener::TcpListener::bind(&addrs[0], tls_acceptor, logger)
                 .await
                 .map(CowRpcListener::Tcp)?,
-            Some(SupportedProto::WebSocket) => {
-                websocket_listener::WebSocketListener::bind(interface, tls_acceptor, logger)
-                    .await
-                    .map(CowRpcListener::WebSocket)?
-            }
+            "ws" | "wss" => websocket_listener::WebSocketListener::bind(&addrs[0], tls_acceptor, logger)
+                .await
+                .map(CowRpcListener::WebSocket)?,
             _ => {
                 return Err(CowRpcError::Internal(
                     "Unable to build listener, missing protocol".to_string(),
@@ -323,10 +251,6 @@ pub enum CowRpcListener {
 }
 
 impl CowRpcListener {
-    pub fn builder() -> ListenerBuilder {
-        ListenerBuilder::new()
-    }
-
     pub async fn incoming(self) -> CowStream<CowFuture<CowRpcTransport>> {
         match self {
             CowRpcListener::Tcp(tcp) => {
@@ -361,7 +285,7 @@ impl CowRpcListener {
 
 #[async_trait]
 pub trait Transport {
-    async fn connect(uri: Uri, logger: Logger) -> Result<Self>
+    async fn connect(url: Url, logger: Logger) -> Result<Self>
     where
         Self: Sized;
     fn message_stream_sink(self) -> (CowStream<CowRpcMessage>, CowSink<CowRpcMessage>);
@@ -387,20 +311,16 @@ impl CowRpcTransport {
 
 #[async_trait]
 impl Transport for CowRpcTransport {
-    async fn connect(uri: Uri, logger: Logger) -> Result<Self>
+    async fn connect(url: Url, logger: Logger) -> Result<Self>
     where
         Self: Sized,
     {
-        if let Some(scheme) = uri.clone().scheme() {
-            match scheme {
-                "tcp" => tcp::TcpTransport::connect(uri, logger).await.map(CowRpcTransport::Tcp),
-                "ws" | "wss" => websocket::WebSocketTransport::connect(uri, logger)
-                    .await
-                    .map(|transport| CowRpcTransport::WebSocket(Box::new(transport))),
-                _ => Err(TransportError::InvalidUrl("Bad scheme provided".to_string()).into()),
-            }
-        } else {
-            Err(TransportError::InvalidUrl("No scheme provided".to_string()).into())
+        match url.scheme() {
+            "tcp" => tcp::TcpTransport::connect(url, logger).await.map(CowRpcTransport::Tcp),
+            "ws" | "wss" => websocket::WebSocketTransport::connect(url, logger)
+                .await
+                .map(|transport| CowRpcTransport::WebSocket(Box::new(transport))),
+            _ => Err(TransportError::InvalidUrl("Bad scheme provided".to_string()).into()),
         }
     }
 

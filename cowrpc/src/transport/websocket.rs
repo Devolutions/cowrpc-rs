@@ -4,7 +4,6 @@ use std::time::{Duration, Instant};
 
 use crate::transport::{CowSink, Transport};
 
-use crate::transport::uri::Uri;
 use crate::transport::{CowRpcTransportError, MessageInterceptor, TransportError};
 
 use byteorder::LittleEndian;
@@ -31,6 +30,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use tokio::net::TcpStream;
 use tokio_rustls::rustls;
+use url::Url;
 
 type WsStream = Pin<Box<dyn Stream<Item = std::result::Result<WsMessage, WsError>> + Send + Sync>>;
 type WsSink = Pin<Box<dyn Sink<WsMessage, Error = WsError> + Send>>;
@@ -191,14 +191,14 @@ impl WebSocketTransport {
 
 #[async_trait()]
 impl Transport for WebSocketTransport {
-    async fn connect(uri: Uri, logger: Logger) -> Result<Self>
+    async fn connect(url: Url, logger: Logger) -> Result<Self>
     where
         Self: Sized,
     {
         let client_config = Arc::new(rustls::ClientConfig::default());
         let tls_connector = tokio_rustls::TlsConnector::from(client_config);
 
-        match async_tungstenite::tokio::connect_async_with_tls_connector(uri.to_string(), Some(tls_connector)).await {
+        match async_tungstenite::tokio::connect_async_with_tls_connector(url.as_str(), Some(tls_connector)).await {
             Ok((stream, _)) => Ok(WebSocketTransport::new(
                 CowWebSocketStream::ConnectStream(stream),
                 None,

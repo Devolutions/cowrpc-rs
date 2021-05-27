@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-
 use crate::error::{CowRpcError, Result};
 use crate::transport::websocket::{CowWebSocketStream, WebSocketTransport};
 use crate::transport::{CowFuture, CowStream, Listener, MessageInterceptor, TransportError};
@@ -7,6 +5,7 @@ use async_trait::async_trait;
 use async_tungstenite::tokio::accept_async;
 
 use slog::Logger;
+use std::net::SocketAddr;
 use tokio::net::{TcpListener as TcpTokioListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 
