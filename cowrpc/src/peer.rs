@@ -11,6 +11,7 @@ use futures::prelude::*;
 use futures::ready;
 
 use crate::transport::CowStream;
+use slog::{error, o, Drain, Logger};
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::atomic::{self, AtomicUsize};
@@ -31,6 +32,7 @@ pub struct CowRpcPeer {
     msg_processor: Option<CowRpcPeerAsyncMsgProcessor>,
     on_http_msg_callback: Option<Box<HttpMsgCallback>>,
     msg_processing_task: Option<JoinHandle<Result<()>>>,
+    logger: Logger,
 }
 
 impl CowRpcPeer {
@@ -41,6 +43,7 @@ impl CowRpcPeer {
             msg_processor: None,
             on_http_msg_callback: None,
             msg_processing_task: None,
+            logger: slog::Logger::root(slog_stdlog::StdLog.fuse(), o!()),
         }
     }
 
@@ -55,24 +58,27 @@ impl CowRpcPeer {
         let connection_timeout = self.connection_timeout.unwrap_or_else(|| Duration::from_secs(30));
 
         let uri = Uri::from_str(&self.url).map_err(|e| CowRpcError::Internal(e.to_string()))?;
+        let logger = self.logger.clone();
 
-        let mut peer = match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri)).await {
-            Ok(connect_result) => {
-                let transport = connect_result?;
-                let mut peer = CowRpcAsyncPeer::new(transport, self.on_http_msg_callback.take());
-                peer.handshake().await?;
-                peer
-            }
-            Err(_) => {
-                return Err(CowRpcError::Proto(format!("Connection attempt timed out")));
-            }
-        };
+        let mut peer =
+            match tokio::time::timeout(connection_timeout, CowRpcTransport::connect(uri, logger.clone())).await {
+                Ok(connect_result) => {
+                    let transport = connect_result?;
+                    let mut peer = CowRpcAsyncPeer::new(transport, self.on_http_msg_callback.take());
+                    peer.handshake().await?;
+                    peer
+                }
+                Err(_) => {
+                    return Err(CowRpcError::Proto(format!("Connection attempt timed out")));
+                }
+            };
 
         let msg_processor = peer.message_processor();
         self.msg_processor = Some(msg_processor.clone());
 
         let msg_processing_task = tokio::spawn(async move {
             loop {
+                let logger_clone = logger.clone();
                 match futures::StreamExt::next(&mut peer).await {
                     Some(Ok(msg)) => {
                         let msg_processor_clone = msg_processor.clone();
@@ -80,14 +86,14 @@ impl CowRpcPeer {
                             match msg_processor_clone.process_message(msg).await {
                                 Ok(_) => {}
                                 Err(e) => {
-                                    error!("Msg processor got an error : {:?}", e);
+                                    error!(logger_clone, "Msg processor got an error : {:?}", e);
                                 }
                             }
                             future::ready(())
                         });
                     }
                     Some(Err(e)) => {
-                        error!("Peer msg stream failed with error : {:?}", e);
+                        error!(logger_clone, "Peer msg stream failed with error : {:?}", e);
                         return Err(e);
                     }
                     None => {

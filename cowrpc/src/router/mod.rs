@@ -10,8 +10,8 @@ use futures::prelude::*;
 use futures::stream::StreamExt;
 use mouscache::{Cache, CacheFunc};
 use parking_lot::{Mutex as SyncMutex, RwLock as SyncRwLock};
+use slog::{debug, error, info, o, trace, warn, Drain, Logger};
 use std::collections::HashMap;
-
 use std::sync::Arc;
 
 use crate::router::router_peer::{CowRpcRouterPeer, CowRpcRouterPeerSender, CowRpcRouterPeerState};
@@ -73,7 +73,7 @@ impl RouterHandle {
         WaitRouterState {
             registered: false,
             state: self.clone(),
-            waiting_state: waiting_state,
+            waiting_state,
         }
     }
 
@@ -168,6 +168,7 @@ pub struct CowRpcRouterBuilder {
     tls_options: Option<TlsOptions>,
     peers_are_alive_task_info: Option<PeersAreAliveTaskInfo>,
     keep_alive_interval: Option<Duration>,
+    logger: Option<Logger>,
 }
 
 impl CowRpcRouterBuilder {
@@ -211,21 +212,36 @@ impl CowRpcRouterBuilder {
         self
     }
 
+    pub fn logger(mut self, logger: Logger) -> Self {
+        self.logger = Some(logger);
+        self
+    }
+
     pub async fn build(self) -> CowRpcRouter {
         let listener_url = self
             .listener_url
             .unwrap_or_else(|| format!("ws://0.0.0.0:{}", ROUTER_DEFAULT_PORT));
         let router_id = u32::from(self.id.unwrap_or(0)) << 16;
         let cache = self.cache.unwrap_or(mouscache::memory());
+        let logger = self
+            .logger
+            .map(|logger| logger.new(o!("router_id" => format!("{:#010X}", router_id))))
+            .unwrap_or_else(|| {
+                slog::Logger::root(
+                    slog_stdlog::StdLog.fuse(),
+                    o!("router_id" => format!("{:#010X}", router_id)),
+                )
+            });
 
         CowRpcRouter {
             listener_url,
             tls_options: self.tls_options,
-            shared: RouterShared::new(router_id, cache).await,
+            shared: RouterShared::new(router_id, cache, logger.clone()).await,
             adaptor: Adaptor::new(),
             msg_interceptor: None,
             peers_are_alive_task_info: self.peers_are_alive_task_info,
             keep_alive_interval: self.keep_alive_interval,
+            logger,
         }
     }
 }
@@ -237,6 +253,7 @@ pub struct CowRpcRouter {
     msg_interceptor: Option<Box<dyn MessageInterceptor>>,
     peers_are_alive_task_info: Option<PeersAreAliveTaskInfo>,
     keep_alive_interval: Option<Duration>,
+    logger: Logger,
 }
 
 struct PeersAreAliveTaskInfo {
@@ -298,9 +315,10 @@ impl CowRpcRouter {
             msg_interceptor,
             peers_are_alive_task_info,
             keep_alive_interval,
+            logger,
         } = self;
 
-        let mut listener_builder = ListenerBuilder::from_uri(&listener_url)?;
+        let mut listener_builder = ListenerBuilder::from_uri(&listener_url)?.logger(logger.clone());
 
         if let Some(interceptor) = msg_interceptor {
             listener_builder = listener_builder.msg_interceptor(interceptor);
@@ -309,6 +327,8 @@ impl CowRpcRouter {
         if let Some(tls) = tls_options {
             listener_builder = listener_builder.with_ssl(tls);
         }
+
+        let listener = listener_builder.build().await?;
 
         let router_handle = RouterHandle::new();
 
@@ -327,7 +347,7 @@ impl CowRpcRouter {
         let router_handle_clone = router_handle.clone();
         tokio::spawn(
             RouterTask::new(
-                incoming_task(listener_builder.build().await?, shared.clone(), keep_alive_interval),
+                incoming_task(listener, shared.clone(), keep_alive_interval),
                 router_handle.wait_state(RouterState::Stopping),
             )
             .then(|_| async move {
@@ -337,6 +357,8 @@ impl CowRpcRouter {
         );
 
         router_handle.update_state(RouterState::Running);
+
+        slog::info!(logger, "CowRpcRouter started and listening on : {}", listener_url);
 
         Ok(router_handle)
     }
@@ -348,6 +370,7 @@ async fn incoming_task(listener: CowRpcListener, router: RouterShared, keep_aliv
     incoming
         .for_each(move |transport| {
             let router = router_shared_clone.clone();
+            let logger = router.logger.clone();
             tokio::spawn(async move {
                 match transport {
                     Ok(transport) => {
@@ -357,12 +380,12 @@ async fn incoming_task(listener: CowRpcListener, router: RouterShared, keep_aliv
                             }
 
                             if let Err(e) = handle_connection(transport, router).await {
-                                error!("Peer finished with error: {:?}", e);
+                                error!(logger, "Peer finished with error: {:?}", e);
                             }
                         };
                     }
                     Err(e) => {
-                        error!("{}", e);
+                        error!(logger, "{}", e);
                     }
                 }
             });
@@ -439,9 +462,18 @@ async fn handle_connection(transport: CowRpcTransport, router: RouterShared) -> 
     }
 }
 
-pub(crate) async fn process_handshake(transport: CowRpcTransport, router: RouterShared) -> Result<CowRpcRouterPeer> {
-    let transport = transport;
+pub(crate) async fn process_handshake(
+    mut transport: CowRpcTransport,
+    router: RouterShared,
+) -> Result<CowRpcRouterPeer> {
     let remote_addr = transport.remote_addr();
+    let peer_id = generate_peer_id(&router);
+    transport.set_logger(
+        router
+            .logger
+            .clone()
+            .new(o!("peer_id" => format!("{:#010X}", peer_id), "remote_addr" => remote_addr)),
+    );
     let (mut reader_stream, writer_sink) = transport.message_stream_sink();
     let peer = match reader_stream.next().await {
         Some(msg) => match msg? {
@@ -452,10 +484,9 @@ pub(crate) async fn process_handshake(transport: CowRpcTransport, router: Router
                     if hdr.flags & COW_RPC_FLAG_DIRECT != 0 {
                         return Err(CowRpcError::Internal("Direct mode is not implemented.".to_string()));
                     } else {
-                        trace!("Client connected from {:?}", remote_addr);
+                        trace!(router.logger, "Client connected from {:?}", remote_addr);
 
                         let router = router.clone();
-                        let peer_id = generate_peer_id(&router);
 
                         let mut peer = CowRpcRouterPeer::new(peer_id, writer_sink, reader_stream, router);
 
@@ -503,18 +534,20 @@ pub(crate) struct RouterSharedInner {
     verify_identity_cb: RwLock<Option<Box<IdentityVerificationCallback>>>,
     on_peer_connection_callback: RwLock<Option<Box<PeerConnectionCallback>>>,
     on_peer_disconnection_callback: RwLock<Option<Box<PeerDisconnectionCallback>>>,
+    logger: slog::Logger,
 }
 
 impl RouterSharedInner {
-    async fn new(id: u32, cache: Cache) -> RouterSharedInner {
+    async fn new(id: u32, cache: Cache, logger: Logger) -> RouterSharedInner {
         RouterSharedInner {
             id,
-            cache: RouterCache::new(cache.clone()),
+            cache: RouterCache::new(cache.clone(), logger.clone()),
             peer_senders: Arc::new(RwLock::new(HashMap::new())),
             verify_identity_cb: RwLock::new(None),
             on_peer_connection_callback: RwLock::new(None),
             multi_router_peer: RwLock::new(None),
             on_peer_disconnection_callback: RwLock::new(None),
+            logger,
         }
     }
 
@@ -539,15 +572,15 @@ impl RouterSharedInner {
 
                 if let Err(e) = self.cache.get_raw_cache().set_rem(ALLOCATED_COW_ID_SET, peer_id) {
                     error!(
-                        "Unable to remove allocated cow id {:#010X}, got error: {:?}",
-                        peer_id, e
+                        self.logger,
+                        "Unable to remove allocated cow id {:#010X}, got error: {:?}", peer_id, e
                     );
                 }
 
-                trace!("Peer {:#010X} removed", peer_id);
+                trace!(self.logger, "Peer {:#010X} removed", peer_id);
             }
             None => {
-                warn!("Peer {:#010X} not found, it can't be removed", peer_id);
+                warn!(self.logger, "Peer {:#010X} not found, it can't be removed", peer_id);
             }
         }
     }
@@ -567,17 +600,17 @@ impl RouterSharedInner {
                         return;
                     }
                     Err(e) => {
-                        error!("Message can't be sent via multi_router_peer (nats): {}", e);
+                        error!(self.logger, "Message can't be sent via multi_router_peer (nats): {}", e);
                     }
                 }
             } else {
-                error!("can't send message to the other router: multi_router_peer is None (nats is probably not configured)");
+                error!(self.logger, "can't send message to the other router: multi_router_peer is None (nats is probably not configured)");
             }
         } else {
             let msg_clone = msg.clone();
             if let Some(sender) = self.find_sender(dst_id).await {
                 if let Err(e) = sender.send_messages(msg_clone).await {
-                    warn!("Send message to peer ID {} failed: {}", dst_id, e);
+                    warn!(self.logger, "Send message to peer ID {} failed: {}", dst_id, e);
                     sender.set_connection_error().await;
                 } else {
                     return;
@@ -586,6 +619,7 @@ impl RouterSharedInner {
         }
 
         warn!(
+            self.logger,
             "Host unreachable, message can't be forwarded. (msgType={}, srcId={}, dstId={})",
             msg.get_msg_name(),
             msg.get_src_id(),
@@ -620,7 +654,7 @@ impl RouterSharedInner {
                             msg_clone.add_flag(COW_RPC_FLAG_RESPONSE | flag);
 
                             if let Err(e) = sender.send_messages(msg_clone).await {
-                                warn!("Send message to peer ID {} failed: {}", src_id, e);
+                                warn!(self.logger, "Send message to peer ID {} failed: {}", src_id, e);
                                 sender.set_connection_error().await;
                             }
                         }
@@ -660,7 +694,7 @@ impl RouterSharedInner {
                     .send_messages(CowRpcMessage::Result(header, msg, Vec::new()))
                     .await
                 {
-                    warn!("Send message to peer ID {} failed: {}", header.src_id, e);
+                    warn!(self.logger, "Send message to peer ID {} failed: {}", header.src_id, e);
                     sender.set_connection_error().await;
                 }
             }
@@ -689,12 +723,12 @@ impl RouterSharedInner {
 
             match res {
                 Ok(_) => {
-                    debug!("Identity {} removed", identity.name);
+                    debug!(self.logger, "Identity {} removed", identity.name);
                 }
                 Err(e) => {
                     warn!(
-                        "Unable to remove identity record {}, got error: {:?}",
-                        &identity.name, e
+                        self.logger,
+                        "Unable to remove identity record {}, got error: {:?}", &identity.name, e
                     );
                 }
             }
@@ -734,9 +768,9 @@ impl Deref for RouterShared {
 }
 
 impl RouterShared {
-    async fn new(id: u32, cache: Cache) -> RouterShared {
+    async fn new(id: u32, cache: Cache, logger: Logger) -> RouterShared {
         RouterShared {
-            inner: Arc::new(RouterSharedInner::new(id, cache).await),
+            inner: Arc::new(RouterSharedInner::new(id, cache, logger).await),
         }
     }
 }
@@ -744,11 +778,12 @@ impl RouterShared {
 #[derive(Clone)]
 struct RouterCache {
     inner: Cache,
+    logger: Logger,
 }
 
 impl RouterCache {
-    fn new(cache: Cache) -> Self {
-        RouterCache { inner: cache }
+    fn new(cache: Cache, logger: Logger) -> Self {
+        RouterCache { inner: cache, logger }
     }
 
     fn get_raw_cache(&self) -> &Cache {
@@ -774,8 +809,8 @@ impl RouterCache {
         {
             Ok(true) => {}
             Ok(false) => warn!(
-                "Cow addr {:#010X} was updated and now has identity {}",
-                peer_id, identity.name
+                self.logger,
+                "Cow addr {:#010X} was updated and now has identity {}", peer_id, identity.name
             ),
             _ => {
                 return Err(CowRpcError::Internal(format!(
@@ -787,16 +822,19 @@ impl RouterCache {
 
         match self.inner.hash_set(IDENTITY_RECORDS, identity.name.as_ref(), peer_id) {
             Ok(true) => info!(
-                "Identity added in router cache: den_id: {}, cow_id: {:#010X}",
-                identity.name, peer_id
+                self.logger,
+                "Identity added in router cache: den_id: {}, cow_id: {:#010X}", identity.name, peer_id
             ),
             Ok(false) => warn!(
-                "Identity {} was updated and now belongs to peer {:#010X}",
-                identity.name, peer_id
+                self.logger,
+                "Identity {} was updated and now belongs to peer {:#010X}", identity.name, peer_id
             ),
             Err(redis_err) => {
                 if let Err(e) = self.inner.hash_delete(COW_ID_RECORDS, &[peer_id.to_string().as_ref()]) {
-                    error!("Unable to clean cow id record {:#010X}, got error {:?}", peer_id, e);
+                    error!(
+                        self.logger,
+                        "Unable to clean cow id record {:#010X}, got error {:?}", peer_id, e
+                    );
                 }
                 return Err(CowRpcError::Internal(format!(
                     "Unable to add record of identity {} to peer {:#010X} with error {:?}",
@@ -812,12 +850,12 @@ impl RouterCache {
         let mut got_error = false;
         match self.inner.hash_delete(IDENTITY_RECORDS, &[identity.name.as_ref()]) {
             Ok(_) => info!(
-                "Identity removed from router cache: den_id: {}, cow_id: {:#010X}",
-                identity.name, peer_id
+                self.logger,
+                "Identity removed from router cache: den_id: {}, cow_id: {:#010X}", identity.name, peer_id
             ),
             _ => {
                 got_error = true;
-                error!("Unable to clean cow id record {:#010X}", peer_id);
+                error!(self.logger, "Unable to clean cow id record {:#010X}", peer_id);
             }
         }
 
@@ -825,7 +863,7 @@ impl RouterCache {
             Ok(_) => {}
             _ => {
                 got_error = true;
-                error!("Unable to clean cow id record {:#010X}", peer_id);
+                error!(self.logger, "Unable to clean cow id record {:#010X}", peer_id);
             }
         }
 

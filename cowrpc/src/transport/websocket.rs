@@ -26,6 +26,7 @@ use async_tungstenite::WebSocketStream;
 use futures::StreamExt;
 use std::cmp::min;
 
+use slog::{debug, error, trace, Logger};
 use std::pin::Pin;
 use std::task::{Context, Poll, Waker};
 use tokio::net::TcpStream;
@@ -58,10 +59,11 @@ struct ServerWebSocketPingUtils {
     send_ping_error: Arc<Mutex<Option<TransportError>>>,
     ping_interval: Duration,
     ws_sink: Arc<AsyncMutex<WsSink>>,
+    logger: Logger,
 }
 
 impl ServerWebSocketPingUtils {
-    fn new(config: &WsPingConfig, ws_sink: Arc<AsyncMutex<WsSink>>) -> Self {
+    fn new(config: &WsPingConfig, ws_sink: Arc<AsyncMutex<WsSink>>, logger: Logger) -> Self {
         ServerWebSocketPingUtils {
             send_ping: Arc::new(Mutex::new(true)),
             ping_expired: Arc::new(Mutex::new(false)),
@@ -69,6 +71,7 @@ impl ServerWebSocketPingUtils {
             send_ping_error: Arc::new(Mutex::new(None)),
             ping_interval: config.ping_interval,
             ws_sink,
+            logger,
         }
     }
 
@@ -96,6 +99,7 @@ impl ServerWebSocketPingUtils {
 
     fn send_ping(&self, waker: Waker) -> Result<()> {
         let ping_utils = self.clone();
+        let logger = self.logger.clone();
 
         tokio::spawn(async move {
             let result = ping_utils
@@ -106,7 +110,7 @@ impl ServerWebSocketPingUtils {
                 .await;
             match result {
                 Ok(_) => {
-                    trace!("WS_PING sent");
+                    trace!(logger, "WS_PING sent");
 
                     let now = tokio::time::Instant::now();
                     let ping_expired_instant = now + Duration::from_secs(PING_TIMEOUT);
@@ -129,7 +133,7 @@ impl ServerWebSocketPingUtils {
                     waker.wake();
                 }
                 Err(e) => {
-                    debug!("Sending WS_PING failed: {}", e);
+                    debug!(logger, "Sending WS_PING failed: {}", e);
                     *ping_utils.send_ping_error.lock() = Some(TransportError::from(e));
                 }
             }
@@ -139,7 +143,7 @@ impl ServerWebSocketPingUtils {
     }
 
     fn pong_received(&self) {
-        trace!("WS_PONG received");
+        trace!(self.logger, "WS_PONG received");
         *self.waiting_pong.lock() = false;
     }
 }
@@ -155,31 +159,42 @@ pub struct WebSocketTransport {
     callback_handler: Option<Box<dyn MessageInterceptor>>,
     connected_at: Instant,
     ping_config: Option<WsPingConfig>,
+    logger: Logger,
 }
 
 impl WebSocketTransport {
-    pub fn new(stream: CowWebSocketStream, callback_handler: Option<Box<dyn MessageInterceptor>>) -> Self {
+    pub fn new(
+        stream: CowWebSocketStream,
+        callback_handler: Option<Box<dyn MessageInterceptor>>,
+        logger: Logger,
+    ) -> Self {
         WebSocketTransport {
             stream,
             callback_handler,
             connected_at: Instant::now(),
             ping_config: None,
+            logger,
         }
     }
 
-    pub fn new_server(stream: CowWebSocketStream, callback_handler: Option<Box<dyn MessageInterceptor>>) -> Self {
+    pub fn new_server(
+        stream: CowWebSocketStream,
+        callback_handler: Option<Box<dyn MessageInterceptor>>,
+        logger: Logger,
+    ) -> Self {
         WebSocketTransport {
             stream,
             callback_handler,
             connected_at: Instant::now(),
             ping_config: Some(WsPingConfig::new(None)),
+            logger,
         }
     }
 }
 
 #[async_trait()]
 impl Transport for WebSocketTransport {
-    async fn connect(uri: Uri) -> Result<Self>
+    async fn connect(uri: Uri, logger: Logger) -> Result<Self>
     where
         Self: Sized,
     {
@@ -187,9 +202,13 @@ impl Transport for WebSocketTransport {
         let tls_connector = tokio_rustls::TlsConnector::from(client_config);
 
         match async_tungstenite::tokio::connect_async_with_tls_connector(uri.to_string(), Some(tls_connector)).await {
-            Ok((stream, _)) => Ok(WebSocketTransport::new(CowWebSocketStream::ConnectStream(stream), None)),
+            Ok((stream, _)) => Ok(WebSocketTransport::new(
+                CowWebSocketStream::ConnectStream(stream),
+                None,
+                logger,
+            )),
             Err(e) => {
-                error!("{:?}", e);
+                error!(logger, "{:?}", e);
                 Err(CowRpcError::from(TransportError::UnableToConnect))
             }
         }
@@ -222,15 +241,24 @@ impl Transport for WebSocketTransport {
 
         let mut ping_util = None;
         if let Some(ping_config) = &self.ping_config {
-            ping_util = Some(ServerWebSocketPingUtils::new(ping_config, sink.clone()))
+            ping_util = Some(ServerWebSocketPingUtils::new(
+                ping_config,
+                sink.clone(),
+                self.logger.clone(),
+            ))
         }
 
         let cow_stream = CowMessageStream::new(
             stream,
             self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
             ping_util,
+            self.logger.clone(),
         );
-        let cow_sink = CowMessageSink::new(sink, self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()));
+        let cow_sink = CowMessageSink::new(
+            sink,
+            self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
+            self.logger.clone(),
+        );
         (Box::pin(cow_stream), Box::pin(cow_sink))
     }
 
@@ -257,6 +285,10 @@ impl Transport for WebSocketTransport {
     fn up_time(&self) -> Duration {
         Instant::now().duration_since(self.connected_at)
     }
+
+    fn set_logger(&mut self, logger: Logger) {
+        self.logger = logger;
+    }
 }
 
 pub struct CowMessageStream {
@@ -264,6 +296,7 @@ pub struct CowMessageStream {
     pub data_received: Vec<u8>,
     pub callback_handler: Option<Box<dyn MessageInterceptor>>,
     ping_utils: Option<ServerWebSocketPingUtils>,
+    logger: Logger,
 }
 
 impl CowMessageStream {
@@ -271,12 +304,14 @@ impl CowMessageStream {
         stream: WsStream,
         callback_handler: Option<Box<dyn MessageInterceptor>>,
         ping_utils: Option<ServerWebSocketPingUtils>,
+        logger: Logger,
     ) -> Self {
         CowMessageStream {
             stream,
             data_received: Vec::new(),
             callback_handler,
             ping_utils,
+            logger,
         }
     }
 }
@@ -307,13 +342,13 @@ impl Stream for CowMessageStream {
                     if let Some(ref mut interceptor) = this.callback_handler {
                         match interceptor.before_recv(msg) {
                             Some(msg) => {
-                                debug!("<< {}", msg.get_msg_info());
+                                debug!(this.logger, "<< {}", msg.get_msg_info());
                                 return Poll::Ready(Some(Ok(msg)));
                             }
                             None => {}
                         };
                     } else {
-                        debug!("<< {}", msg.get_msg_info());
+                        debug!(this.logger, "<< {}", msg.get_msg_info());
                         return Poll::Ready(Some(Ok(msg)));
                     }
                 }
@@ -343,13 +378,13 @@ impl Stream for CowMessageStream {
                                 if let Some(ref mut interceptor) = this.callback_handler {
                                     match interceptor.before_recv(msg) {
                                         Some(msg) => {
-                                            debug!("<< {}", msg.get_msg_info());
+                                            debug!(this.logger, "<< {}", msg.get_msg_info());
                                             return Poll::Ready(Some(Ok(msg)));
                                         }
                                         None => {}
                                     };
                                 } else {
-                                    debug!("<< {}", msg.get_msg_info());
+                                    debug!(this.logger, "<< {}", msg.get_msg_info());
                                     return Poll::Ready(Some(Ok(msg)));
                                 }
                             }
@@ -378,7 +413,7 @@ impl Stream for CowMessageStream {
                             return Poll::Ready(None);
                         }
                         e => {
-                            error!("ws.read_message returned error: {}", e);
+                            error!(this.logger, "ws.read_message returned error: {}", e);
                             return Poll::Ready(Some(Err(CowRpcTransportError::from(e).into())));
                         }
                     }
@@ -395,14 +430,20 @@ struct CowMessageSink {
     sink: Arc<AsyncMutex<WsSink>>,
     data_to_send: Vec<u8>,
     callback_handler: Option<Box<dyn MessageInterceptor>>,
+    logger: Logger,
 }
 
 impl CowMessageSink {
-    fn new(sink: Arc<AsyncMutex<WsSink>>, callback_handler: Option<Box<dyn MessageInterceptor>>) -> Self {
+    fn new(
+        sink: Arc<AsyncMutex<WsSink>>,
+        callback_handler: Option<Box<dyn MessageInterceptor>>,
+        logger: Logger,
+    ) -> Self {
         CowMessageSink {
             sink: sink,
             data_to_send: Vec::new(),
             callback_handler,
+            logger,
         }
     }
 }
@@ -425,7 +466,7 @@ impl Sink<CowRpcMessage> for CowMessageSink {
             };
         }
 
-        debug!(">> {}", msg.get_msg_info());
+        debug!(this.logger, ">> {}", msg.get_msg_info());
         msg.write_to(&mut this.data_to_send)?;
 
         Ok(())

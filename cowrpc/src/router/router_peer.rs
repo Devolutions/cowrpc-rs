@@ -8,10 +8,12 @@ use futures::stream::StreamExt;
 use parking_lot::RwLock as SyncRwLock;
 use std::collections::HashMap;
 
+use slog::o;
 use std::sync::Arc;
 
 use crate::router::RouterShared;
 use crate::transport::CowStream;
+use slog::{debug, error, warn, Logger};
 use std::ops::Deref;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
@@ -20,6 +22,7 @@ pub(crate) struct CowRpcRouterPeer {
     identity: Arc<SyncRwLock<Option<CowRpcIdentity>>>,
     reader_stream: CowStream<CowRpcMessage>,
     router: RouterShared,
+    logger: Logger,
 }
 
 impl CowRpcRouterPeer {
@@ -35,11 +38,14 @@ impl CowRpcRouterPeer {
             state: RwLock::new(CowRpcRouterPeerState::Connected),
         });
 
+        let logger = router.logger.new(o!("peer_id" => cow_id));
+
         CowRpcRouterPeer {
             inner,
             identity: Arc::new(SyncRwLock::new(None)),
             reader_stream: stream,
             router,
+            logger,
         }
     }
 
@@ -61,7 +67,7 @@ impl CowRpcRouterPeer {
             match self.reader_stream.next().await {
                 Some(Ok(msg)) => {
                     if let Err(e) = self.process_msg(msg).await {
-                        debug!("Msg failed to be processed: {}", e);
+                        debug!(self.logger, "Msg failed to be processed: {}", e);
                     }
                 }
                 Some(Err(e)) => {
@@ -92,8 +98,10 @@ impl CowRpcRouterPeer {
         match msg {
             CowRpcMessage::Handshake(hdr, msg) => {
                 error!(
+                    self.logger,
                     "CowRpc Protocol Error: Handshake should have been processed at the beginning: hdr={:?} - msg={:?}",
-                    hdr, msg
+                    hdr,
+                    msg
                 );
             }
             CowRpcMessage::Register(hdr, msg) => {
@@ -101,8 +109,8 @@ impl CowRpcRouterPeer {
                     self.process_register_req(hdr, msg).await?;
                 } else {
                     error!(
-                        "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}",
-                        hdr, msg
+                        self.logger,
+                        "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}", hdr, msg
                     );
                 }
             }
@@ -112,8 +120,8 @@ impl CowRpcRouterPeer {
                     self.process_identify_req(hdr, msg).await?;
                 } else {
                     error!(
-                        "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}",
-                        hdr, msg
+                        self.logger,
+                        "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}", hdr, msg
                     );
                 }
             }
@@ -123,8 +131,8 @@ impl CowRpcRouterPeer {
                     self.process_resolve_req(hdr, msg).await?;
                 } else {
                     error!(
-                        "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}",
-                        hdr, msg
+                        self.logger,
+                        "CowRpc Protocol Error: Router can't process a response: hdr={:?} - msg={:?}", hdr, msg
                     );
                 }
             }
@@ -141,7 +149,10 @@ impl CowRpcRouterPeer {
                 if !hdr.is_response() {
                     self.process_verify_req(hdr, msg, &payload).await?;
                 } else {
-                    error!("CowRpc Protocol Error: Router can't process a response: hdr={:?}", hdr);
+                    error!(
+                        self.logger,
+                        "CowRpc Protocol Error: Router can't process a response: hdr={:?}", hdr
+                    );
                 }
             }
 
@@ -197,8 +208,8 @@ impl CowRpcRouterPeer {
                     }
                     Err(e) => {
                         warn!(
-                            "Unable to add Identity {} the the router cache : {:?}",
-                            identity.name, e
+                            self.logger,
+                            "Unable to add Identity {} the the router cache : {:?}", identity.name, e
                         );
                         flag = CowRpcErrorCode::Unavailable;
                     }
@@ -233,7 +244,7 @@ impl CowRpcRouterPeer {
                         }
                     }
                     Err(e) => {
-                        error!("Cache returned an error: {:?}", e);
+                        error!(self.logger, "Cache returned an error: {:?}", e);
                         flag = CowRpcErrorCode::NotFound.into();
                     }
                 }
@@ -260,7 +271,7 @@ impl CowRpcRouterPeer {
                             flag = CowRpcErrorCode::Success.into();
                         }
                         Err(e) => {
-                            error!("Cache returned an error: {:?}", e);
+                            error!(self.logger, "Cache returned an error: {:?}", e);
                             flag = CowRpcErrorCode::NotFound.into();
                         }
                         _ => {

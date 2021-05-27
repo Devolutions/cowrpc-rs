@@ -20,6 +20,7 @@ use tokio_rustls::{rustls, TlsAcceptor};
 
 mod uri;
 pub use crate::transport::uri::{Uri, UriError};
+use slog::{o, Drain, Logger};
 
 pub mod adaptor;
 mod interceptor;
@@ -148,7 +149,7 @@ impl From<::async_tungstenite::tungstenite::Error> for TransportError {
 pub trait Listener {
     type TransportInstance: Transport;
 
-    async fn bind(addr: &SocketAddr, tls_connector: Option<TlsAcceptor>) -> Result<Self>
+    async fn bind(addr: &SocketAddr, tls_connector: Option<TlsAcceptor>, logger: Logger) -> Result<Self>
     where
         Self: Sized;
     async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>>;
@@ -158,23 +159,19 @@ pub trait Listener {
     }
 }
 
+#[derive(Default)]
 pub struct ListenerBuilder {
     interface: Option<SocketAddr>,
     proto: Option<SupportedProto>,
     tls_options: Option<TlsOptions>,
     interceptor: Option<Box<dyn MessageInterceptor>>,
     needs_tls: bool,
+    logger: Option<Logger>,
 }
 
 impl ListenerBuilder {
     pub fn new() -> Self {
-        ListenerBuilder {
-            interface: None,
-            proto: None,
-            tls_options: None,
-            interceptor: None,
-            needs_tls: false,
-        }
+        ListenerBuilder::default()
     }
 
     pub fn from_uri(uri: &str) -> Result<Self> {
@@ -233,6 +230,7 @@ impl ListenerBuilder {
             tls_options: None,
             interceptor: None,
             needs_tls,
+            logger: None,
         })
     }
 
@@ -256,6 +254,11 @@ impl ListenerBuilder {
         self
     }
 
+    pub fn logger(mut self, logger: Logger) -> Self {
+        self.logger = Some(logger);
+        self
+    }
+
     pub async fn build(self) -> Result<CowRpcListener> {
         if self.needs_tls && self.tls_options.is_none() {
             return Err(CowRpcError::Internal(
@@ -263,6 +266,10 @@ impl ListenerBuilder {
                     .to_string(),
             ));
         }
+
+        let logger = self
+            .logger
+            .unwrap_or_else(|| slog::Logger::root(slog_stdlog::StdLog.fuse(), o!()));
 
         let interface = &self
             .interface
@@ -286,12 +293,14 @@ impl ListenerBuilder {
         // Build the listener itself
 
         let mut listener = match self.proto {
-            Some(SupportedProto::Tcp) => tcp_listener::TcpListener::bind(interface, tls_acceptor)
+            Some(SupportedProto::Tcp) => tcp_listener::TcpListener::bind(interface, tls_acceptor, logger)
                 .await
                 .map(|l| CowRpcListener::Tcp(l))?,
-            Some(SupportedProto::WebSocket) => websocket_listener::WebSocketListener::bind(interface, tls_acceptor)
-                .await
-                .map(|l| CowRpcListener::WebSocket(l))?,
+            Some(SupportedProto::WebSocket) => {
+                websocket_listener::WebSocketListener::bind(interface, tls_acceptor, logger)
+                    .await
+                    .map(|l| CowRpcListener::WebSocket(l))?
+            }
             _ => {
                 return Err(CowRpcError::Internal(
                     "Unable to build listener, missing protocol".to_string(),
@@ -350,7 +359,7 @@ impl CowRpcListener {
 
 #[async_trait]
 pub trait Transport {
-    async fn connect(uri: Uri) -> Result<Self>
+    async fn connect(uri: Uri, logger: Logger) -> Result<Self>
     where
         Self: Sized;
     fn message_stream_sink(self) -> (CowStream<CowRpcMessage>, CowSink<CowRpcMessage>);
@@ -359,6 +368,7 @@ pub trait Transport {
     fn local_addr(&self) -> Option<SocketAddr>;
     fn remote_addr(&self) -> Option<SocketAddr>;
     fn up_time(&self) -> Duration;
+    fn set_logger(&mut self, logger: Logger);
 }
 
 pub enum CowRpcTransport {
@@ -375,16 +385,16 @@ impl CowRpcTransport {
 
 #[async_trait]
 impl Transport for CowRpcTransport {
-    async fn connect(uri: Uri) -> Result<Self>
+    async fn connect(uri: Uri, logger: Logger) -> Result<Self>
     where
         Self: Sized,
     {
         if let Some(scheme) = uri.clone().scheme() {
             match scheme {
-                "tcp" => tcp::TcpTransport::connect(uri)
+                "tcp" => tcp::TcpTransport::connect(uri, logger)
                     .await
                     .map(|transport| CowRpcTransport::Tcp(transport)),
-                "ws" | "wss" => websocket::WebSocketTransport::connect(uri)
+                "ws" | "wss" => websocket::WebSocketTransport::connect(uri, logger)
                     .await
                     .map(|transport| CowRpcTransport::WebSocket(transport)),
                 _ => Err(TransportError::InvalidUrl("Bad scheme provided".to_string()).into()),
@@ -439,6 +449,14 @@ impl Transport for CowRpcTransport {
             CowRpcTransport::Tcp(ref tcp) => tcp.up_time(),
             CowRpcTransport::WebSocket(ref ws) => ws.up_time(),
             CowRpcTransport::Interceptor(ref inter) => inter.up_time(),
+        }
+    }
+
+    fn set_logger(&mut self, logger: Logger) {
+        match self {
+            CowRpcTransport::Tcp(ref mut tcp) => tcp.set_logger(logger),
+            CowRpcTransport::WebSocket(ref mut ws) => ws.set_logger(logger),
+            CowRpcTransport::Interceptor(ref mut inter) => inter.set_logger(logger),
         }
     }
 }

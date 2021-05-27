@@ -4,6 +4,7 @@ use crate::transport::uri::Uri;
 use crate::transport::{CowSink, CowStream, MessageInterceptor, Transport, TransportError};
 use async_trait::async_trait;
 use futures::prelude::*;
+use slog::Logger;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -23,7 +24,7 @@ impl Clone for InterceptorTransport {
 
 #[async_trait]
 impl Transport for InterceptorTransport {
-    async fn connect(_uri: Uri) -> Result<Self>
+    async fn connect(_uri: Uri, _logger: Logger) -> Result<Self>
     where
         Self: Sized,
     {
@@ -58,6 +59,10 @@ impl Transport for InterceptorTransport {
 
     fn up_time(&self) -> Duration {
         Duration::from_secs(0)
+    }
+
+    fn set_logger(&mut self, _logger: Logger) {
+        // Nothing to log
     }
 }
 

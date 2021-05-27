@@ -2,20 +2,17 @@ extern crate bufstream;
 extern crate byteorder;
 extern crate bytes;
 extern crate dns_lookup;
-extern crate rmp;
-extern crate url;
-#[macro_use]
-extern crate log;
-extern crate env_logger;
 extern crate mouscache;
-extern crate rand;
 #[macro_use]
 extern crate mouscache_derive;
 extern crate futures;
 extern crate parking_lot;
+extern crate rand;
+extern crate rmp;
 extern crate time;
 extern crate timer;
 extern crate tokio;
+extern crate url;
 
 pub use crate::proto::{CowRpcMessage, Message};
 pub use crate::transport::{CowFuture, CowRpcMessageInterceptor, MessageInjector as CowRpcMessageInjector};
@@ -28,8 +25,6 @@ pub mod peer;
 mod proto;
 pub mod router;
 pub mod transport;
-
-// const NEW_CONNECTION: Token = Token(1);
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcRole {

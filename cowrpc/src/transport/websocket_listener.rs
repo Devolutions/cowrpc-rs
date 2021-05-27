@@ -6,6 +6,7 @@ use crate::transport::{CowFuture, CowStream, Listener, MessageInterceptor, Trans
 use async_trait::async_trait;
 use async_tungstenite::tokio::accept_async;
 
+use slog::Logger;
 use tokio::net::{TcpListener as TcpTokioListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 
@@ -13,13 +14,14 @@ pub struct WebSocketListener {
     listener: TcpTokioListener,
     tls_acceptor: Option<TlsAcceptor>,
     transport_cb_handler: Option<Box<dyn MessageInterceptor>>,
+    logger: Logger,
 }
 
 #[async_trait]
 impl Listener for WebSocketListener {
     type TransportInstance = WebSocketTransport;
 
-    async fn bind(addr: &SocketAddr, tls_acceptor: Option<TlsAcceptor>) -> Result<Self>
+    async fn bind(addr: &SocketAddr, tls_acceptor: Option<TlsAcceptor>, logger: Logger) -> Result<Self>
     where
         Self: Sized,
     {
@@ -28,6 +30,7 @@ impl Listener for WebSocketListener {
                 listener: l,
                 tls_acceptor,
                 transport_cb_handler: None,
+                logger,
             }),
             Err(e) => Err(e.into()),
         }
@@ -38,13 +41,18 @@ impl Listener for WebSocketListener {
             listener,
             tls_acceptor,
             transport_cb_handler,
+            logger,
         } = self;
 
         Box::pin(tokio::stream::StreamExt::map(listener, move |stream| {
             let tcp_stream = stream?;
 
             let cbh = transport_cb_handler.clone();
-            Ok(Box::pin(accept_stream(tcp_stream, tls_acceptor.clone(), cbh)) as CowFuture<Self::TransportInstance>)
+            let logger_clone = logger.clone();
+            Ok(
+                Box::pin(accept_stream(tcp_stream, tls_acceptor.clone(), cbh, logger_clone))
+                    as CowFuture<Self::TransportInstance>,
+            )
         })) as CowStream<CowFuture<Self::TransportInstance>>
     }
 
@@ -57,6 +65,7 @@ async fn accept_stream(
     raw_stream: TcpStream,
     tls_acceptor: Option<TlsAcceptor>,
     cbh: Option<Box<dyn MessageInterceptor>>,
+    logger: Logger,
 ) -> Result<WebSocketTransport> {
     if let Some(tls_acceptor) = tls_acceptor {
         let tls_stream = tls_acceptor
@@ -67,12 +76,14 @@ async fn accept_stream(
         Ok(WebSocketTransport::new_server(
             CowWebSocketStream::AcceptTlsStream(ws_stream),
             cbh,
+            logger,
         ))
     } else {
         let ws_stream = accept_async(raw_stream).await?;
         Ok(WebSocketTransport::new_server(
             CowWebSocketStream::AcceptStream(ws_stream),
             cbh,
+            logger,
         ))
     }
 }

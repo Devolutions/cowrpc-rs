@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use byteorder::{LittleEndian, ReadBytesExt};
 use futures::prelude::*;
 use futures::{self, ready};
+use slog::{debug, error, Logger};
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -19,36 +20,23 @@ pub struct TcpTransport {
     stream: TcpStream,
     callback_handler: Option<Box<dyn MessageInterceptor>>,
     connected_at: Instant,
+    logger: Logger,
 }
 
-// impl Clone for TcpTransport {
-//     fn clone(&self) -> Self {
-//         let stream = self
-//             .stream
-//             .try_clone()
-//             .expect("Async router implementation rely on tcpstream being cloned, this is fatal");
-//
-//         TcpTransport {
-//             stream,
-//             callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
-//             connected_at: self.connected_at,
-//         }
-//     }
-// }
-
 impl TcpTransport {
-    pub fn new(stream: TcpStream, msg_inter: Option<Box<dyn MessageInterceptor>>) -> Self {
+    pub fn new(stream: TcpStream, msg_inter: Option<Box<dyn MessageInterceptor>>, logger: Logger) -> Self {
         TcpTransport {
             stream,
             callback_handler: msg_inter,
             connected_at: Instant::now(),
+            logger,
         }
     }
 }
 
 #[async_trait]
 impl Transport for TcpTransport {
-    async fn connect(uri: Uri) -> Result<Self, CowRpcError>
+    async fn connect(uri: Uri, logger: Logger) -> Result<Self, CowRpcError>
     where
         Self: Sized,
     {
@@ -67,10 +55,11 @@ impl Transport for TcpTransport {
                             stream,
                             callback_handler: None,
                             connected_at: Instant::now(),
+                            logger: logger.clone(),
                         });
                     }
                     Err(e) => {
-                        error!("{:?}", e);
+                        error!(logger, "{:?}", e);
                         return Err(CowRpcError::from(TransportError::UnableToConnect));
                     }
                 }
@@ -87,12 +76,14 @@ impl Transport for TcpTransport {
             stream: writer,
             data_to_send: Vec::new(),
             callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
+            logger: self.logger.clone(),
         });
 
         let stream = Box::pin(CowMessageStream {
             stream: reader,
             data_received: Vec::new(),
             callback_handler: self.callback_handler.as_ref().map(|cbh| cbh.clone_boxed()),
+            logger: self.logger,
         });
 
         (stream, sink)
@@ -117,12 +108,17 @@ impl Transport for TcpTransport {
     fn up_time(&self) -> Duration {
         Instant::now().duration_since(self.connected_at)
     }
+
+    fn set_logger(&mut self, logger: Logger) {
+        self.logger = logger;
+    }
 }
 
 pub struct CowMessageStream {
     pub stream: OwnedReadHalf,
     pub data_received: Vec<u8>,
     pub callback_handler: Option<Box<dyn MessageInterceptor>>,
+    logger: Logger,
 }
 
 impl Stream for CowMessageStream {
@@ -147,13 +143,13 @@ impl Stream for CowMessageStream {
                     if let Some(ref mut interceptor) = this.callback_handler {
                         match interceptor.before_recv(msg) {
                             Some(msg) => {
-                                debug!("<< {}", msg.get_msg_info());
+                                debug!(this.logger, "<< {}", msg.get_msg_info());
                                 return Poll::Ready(Some(Ok(msg)));
                             }
                             None => {}
                         };
                     } else {
-                        debug!("<< {}", msg.get_msg_info());
+                        debug!(this.logger, "<< {}", msg.get_msg_info());
                         return Poll::Ready(Some(Ok(msg)));
                     }
                 }
@@ -189,13 +185,13 @@ impl Stream for CowMessageStream {
                             if let Some(ref mut interceptor) = this.callback_handler {
                                 match interceptor.before_recv(msg) {
                                     Some(msg) => {
-                                        debug!("<< {}", msg.get_msg_info());
+                                        debug!(this.logger, "<< {}", msg.get_msg_info());
                                         return Poll::Ready(Some(Ok(msg)));
                                     }
                                     None => {}
                                 };
                             } else {
-                                debug!("<< {}", msg.get_msg_info());
+                                debug!(this.logger, "<< {}", msg.get_msg_info());
                                 return Poll::Ready(Some(Ok(msg)));
                             }
                         }
@@ -217,6 +213,7 @@ pub struct CowMessageSink {
     pub stream: OwnedWriteHalf,
     pub data_to_send: Vec<u8>,
     pub callback_handler: Option<Box<dyn MessageInterceptor>>,
+    logger: Logger,
 }
 
 impl Sink<CowRpcMessage> for CowMessageSink {
@@ -237,7 +234,7 @@ impl Sink<CowRpcMessage> for CowMessageSink {
             };
         }
 
-        debug!(">> {}", msg.get_msg_info());
+        debug!(this.logger, ">> {}", msg.get_msg_info());
         msg.write_to(&mut this.data_to_send)?;
         Ok(())
     }
