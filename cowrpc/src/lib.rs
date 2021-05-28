@@ -6,6 +6,9 @@ pub use crate::transport::{CowFuture, CowRpcMessageInterceptor, MessageInjector 
 
 use crate::error::{CowRpcError, Result};
 
+// Re-export mouscache
+pub use mouscache;
+
 pub mod error;
 pub mod peer;
 pub mod router;

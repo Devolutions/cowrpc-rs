@@ -99,7 +99,7 @@ impl CowRpcPeer {
             .unwrap_or_else(|| slog::Logger::root(slog_stdlog::StdLog.fuse(), o!()));
 
         let peer_inner = match tokio::time::timeout(
-            config.connection_timeout.clone(),
+            config.connection_timeout,
             CowRpcTransport::connect(url, logger.clone()),
         )
         .await
