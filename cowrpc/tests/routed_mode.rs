@@ -6,7 +6,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use std::time::Duration;
 
-const ROUTER_URL: &str = "ws://localhost:12346";
+const ROUTER_URL: &str = "ws://localhost:10261";
 const SERVER_IDENTITY: &str = "server";
 const VERIFY_REQUEST: &'static [u8] = b"GET / HTTP/1.1 \r\nDen_ID: server \r\nDen-Pop-Token: pop_token\r\n";
 const VERIFY_RESPONSE: &'static [u8] = b"HTTP/1.1 200 OK\r\n\r\n";
