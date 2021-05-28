@@ -28,9 +28,9 @@ mod utils;
 mod websocket;
 mod websocket_listener;
 
-pub type CowFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
-pub type CowStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send>>;
-pub type CowSink<T> = Pin<Box<dyn Sink<T, Error = CowRpcError> + Send>>;
+pub type CowFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + Sync>>;
+pub type CowStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send + Sync>>;
+pub type CowSink<T> = Pin<Box<dyn Sink<T, Error = CowRpcError> + Send + Sync>>;
 
 /// A set of options for a TLS connection.
 pub struct TlsOptions {

@@ -11,18 +11,18 @@ use std::time::Duration;
 async fn main() {
     env_logger::init();
 
-    let mut peer = CowRpcPeer::new("ws://127.0.0.1:12346", None);
+    let peer_config = CowRpcPeer::config("ws://127.0.0.1:12346");
 
-    peer.start().await.expect("Peer start failed");
+    let peer = CowRpcPeer::connect(peer_config).await.expect("Peer connection failed");
 
     let server_id = peer
-        .resolve_async("server", Duration::from_secs(10))
+        .resolve("server", Duration::from_secs(10))
         .await
         .expect("resolve failed");
     info!("server cow_id = {:#010X}", server_id);
 
     let server_name = peer
-        .resolve_reverse_async(server_id, Duration::from_secs(10))
+        .resolve_reverse(server_id, Duration::from_secs(10))
         .await
         .expect("reverse resolve failed");
     info!("server name = {}", server_name);
@@ -31,11 +31,11 @@ async fn main() {
     http_req.push_str("\r\n");
 
     let http_response = peer
-        .call_http_async_v2(server_id, http_req.into_bytes(), Duration::from_secs(10))
+        .call_http(server_id, http_req.into_bytes(), Duration::from_secs(10))
         .await
         .expect("call_http failed");
     let http_response = String::from_utf8_lossy(&http_response).to_string();
     info!("http_response received: {}", http_response);
 
-    peer.stop().await.expect("Peer stop failed");
+    peer.disconnect().await.expect("Peer stop failed");
 }

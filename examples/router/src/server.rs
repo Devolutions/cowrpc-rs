@@ -13,10 +13,8 @@ use std::time::Duration;
 async fn main() {
     env_logger::init();
 
-    let mut peer = CowRpcPeer::new("ws://127.0.0.1:12346", None);
-
-    peer.on_http_msg_callback(on_http_call);
-    peer.start().await.expect("peer can't start");
+    let peer_config = CowRpcPeer::config("ws://127.0.0.1:12346").on_http_msg_callback(on_http_call);
+    let peer = CowRpcPeer::connect(peer_config).await.expect("Connection failed");
 
     let mut verify_req = format!("GET {} HTTP/1.1 \r\n", "/");
     verify_req.push_str(&format!("Den_ID: {} \r\n", "server"));
@@ -24,14 +22,14 @@ async fn main() {
     verify_req.push_str("\r\n");
 
     let result = peer
-        .verify_async(verify_req.into_bytes(), Duration::from_secs(10))
+        .verify(verify_req.into_bytes(), Duration::from_secs(10))
         .await
         .expect("verify failed");
     info!("Verify returned: {}", std::str::from_utf8(&result).unwrap());
 
     futures::future::pending::<()>().await;
 
-    peer.stop().await.expect("Peer stop failed");
+    peer.disconnect().await.expect("Peer stop failed");
 }
 
 fn on_http_call(ctx: CowRpcCallContext, request: &mut [u8]) -> CallFuture<Vec<u8>> {

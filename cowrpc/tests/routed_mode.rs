@@ -18,11 +18,11 @@ const HTTP_BIG_REQUEST: &'static [u8] = &[0u8; 5000]; // We don't care what is t
 async fn router_peers() {
     let router_handle = start_router().await.expect("router start failed");
 
-    let mut server = start_server().await.expect("server start failed");
-    let mut client = start_client().await.expect("client start failed");
+    let server = start_server().await.expect("server start failed");
+    let client = start_client().await.expect("client start failed");
 
-    client.stop().await.expect("client stop failed");
-    server.stop().await.expect("server stop failed");
+    client.disconnect().await.expect("client stop failed");
+    server.disconnect().await.expect("server stop failed");
     router_handle.stop().await;
 }
 
@@ -42,15 +42,15 @@ fn verify_identity_callback(_cow_id: u32, verify_request: &[u8]) -> BoxFuture<(V
 }
 
 async fn start_server() -> Result<CowRpcPeer, CowRpcError> {
-    let mut peer = CowRpcPeer::new(ROUTER_URL, None);
-
-    peer.on_http_msg_callback(on_http_call);
-    peer.start().await.expect("peer can't start");
+    let peer_config = CowRpcPeer::config(ROUTER_URL).on_http_msg_callback(on_http_call);
+    let peer = CowRpcPeer::connect(peer_config)
+        .await
+        .expect("Server connection failed");
 
     let verify_response = peer
-        .verify_async(VERIFY_REQUEST.to_vec(), Duration::from_secs(10))
+        .verify(VERIFY_REQUEST.to_vec(), Duration::from_secs(10))
         .await
-        .expect("verify failed");
+        .expect("Verify failed");
 
     assert_eq!(verify_response, VERIFY_RESPONSE);
 
@@ -69,31 +69,32 @@ fn on_http_call(_ctx: CowRpcCallContext, request: &mut [u8]) -> CallFuture<Vec<u
 }
 
 async fn start_client() -> Result<CowRpcPeer, CowRpcError> {
-    let mut peer = CowRpcPeer::new(ROUTER_URL, None);
-
-    peer.start().await.expect("Peer start failed");
+    let peer_config = CowRpcPeer::config(ROUTER_URL).on_http_msg_callback(on_http_call);
+    let peer = CowRpcPeer::connect(peer_config)
+        .await
+        .expect("Client connection failed");
 
     let server_id = peer
-        .resolve_async(SERVER_IDENTITY, Duration::from_secs(10))
+        .resolve(SERVER_IDENTITY, Duration::from_secs(10))
         .await
         .expect("resolve failed");
 
     let server_name = peer
-        .resolve_reverse_async(server_id, Duration::from_secs(10))
+        .resolve_reverse(server_id, Duration::from_secs(10))
         .await
         .expect("reverse resolve failed");
 
     assert!(server_name.eq(SERVER_IDENTITY));
 
     let http_response = peer
-        .call_http_async_v2(server_id, HTTP_REQUEST.to_vec(), Duration::from_secs(10))
+        .call_http(server_id, HTTP_REQUEST.to_vec(), Duration::from_secs(10))
         .await
         .expect("call_http failed");
 
     assert_eq!(http_response, HTTP_RESPONSE);
 
     let http_response = peer
-        .call_http_async_v2(server_id, HTTP_BIG_REQUEST.to_vec(), Duration::from_secs(10))
+        .call_http(server_id, HTTP_BIG_REQUEST.to_vec(), Duration::from_secs(10))
         .await
         .expect("call_http failed");
 
