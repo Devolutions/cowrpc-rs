@@ -1,34 +1,23 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use crate::transport::{CowSink, Transport};
-
-use crate::transport::{CowRpcTransportError, MessageInterceptor, TransportError};
-
-use byteorder::LittleEndian;
-use futures::prelude::*;
-use futures::{ready, FutureExt, SinkExt};
-use parking_lot::Mutex;
-
-use tokio::sync::Mutex as AsyncMutex;
-
 use crate::error::{CowRpcError, Result};
 use crate::proto::{CowRpcMessage, Message};
-use crate::transport::CowStream;
+use crate::transport::{CowRpcTransportError, CowSink, CowStream, MessageInterceptor, Transport, TransportError};
 use async_trait::async_trait;
 use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
-
 use async_tungstenite::tungstenite::{Error as WsError, Message as WsMessage};
 use async_tungstenite::WebSocketStream;
-
-use futures::StreamExt;
-use std::cmp::min;
-
+use byteorder::LittleEndian;
+use futures::prelude::*;
+use futures::{ready, FutureExt, SinkExt, StreamExt};
+use parking_lot::Mutex;
 use slog::{debug, error, trace, Logger};
+use std::cmp::min;
+use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
+use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio_rustls::rustls;
 use url::Url;
 

@@ -2,19 +2,15 @@ use super::{CowRpcIdentityType, CowRpcMessage};
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto;
 use crate::proto::*;
-use crate::transport::CowSink;
+use crate::router::RouterShared;
+use crate::transport::{CowSink, CowStream};
 use futures::prelude::*;
 use futures::stream::StreamExt;
 use parking_lot::RwLock as SyncRwLock;
+use slog::{debug, error, o, warn, Logger};
 use std::collections::HashMap;
-
-use slog::o;
-use std::sync::Arc;
-
-use crate::router::RouterShared;
-use crate::transport::CowStream;
-use slog::{debug, error, warn, Logger};
 use std::ops::Deref;
+use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
 pub(crate) struct CowRpcRouterPeer {

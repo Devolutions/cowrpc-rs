@@ -19,8 +19,14 @@ pub fn load_private_key(private_key_file_path: &str) -> io::Result<rustls::Priva
     } else {
         let mut rsa_keys = load_rsa_private_key(private_key_file_path)?;
 
-        assert!(!rsa_keys.is_empty());
-        Ok(rsa_keys.remove(0))
+        if !rsa_keys.is_empty() {
+            Ok(rsa_keys.remove(0))
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Failed to parse certificate",
+            ))
+        }
     }
 }
 

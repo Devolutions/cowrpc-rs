@@ -1,12 +1,9 @@
 use crate::error::{CowRpcError, CowRpcErrorCode, Result};
 use crate::proto::{Message, *};
-use crate::transport::{CowRpcTransport, CowRpcTransportError, CowSink, Transport};
+use crate::transport::{CowRpcTransport, CowRpcTransportError, CowSink, CowStream, Transport};
 use crate::{proto, CowRpcCallContext, CowRpcIdentityType};
-use futures::channel::oneshot::channel;
+use futures::channel::oneshot::{channel, Sender as AsyncSender};
 use futures::prelude::*;
-
-use crate::transport::CowStream;
-use futures::channel::oneshot::Sender as AsyncSender;
 use slog::{error, o, Drain, Logger};
 use std::str::FromStr;
 use std::sync::atomic::{self, AtomicUsize};

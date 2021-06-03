@@ -1,7 +1,6 @@
 use super::*;
 use crate::error::Result;
 use crate::proto::CowRpcMessage;
-
 use futures::task::Waker;
 use parking_lot::Mutex;
 use std::collections::VecDeque;

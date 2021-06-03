@@ -1,23 +1,17 @@
-use std::any::Any;
-use std::fmt;
-
-use crate::error::Result;
+use crate::error::{CowRpcError, Result};
 use crate::proto::CowRpcMessage;
-use std::net::SocketAddr;
-use std::time::Duration;
-
-use futures::prelude::*;
-
-use crate::error::CowRpcError;
-
 use crate::transport::utils::{load_certs, load_private_key};
 use async_trait::async_trait;
-use std::pin::Pin;
-use std::sync::Arc;
-use tokio_rustls::{rustls, TlsAcceptor};
-
+use futures::prelude::*;
 use slog::{o, Drain, Logger};
+use std::any::Any;
+use std::fmt;
+use std::net::SocketAddr;
+use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio_rustls::{rustls, TlsAcceptor};
 use url::Url;
 
 pub mod adaptor;

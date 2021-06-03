@@ -22,7 +22,7 @@ pub enum CowRpcMode {
     Direct,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcIdentityType {
     /// Anonymous identity
     None,
