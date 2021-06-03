@@ -182,8 +182,7 @@ impl CowRpcRouterPeer {
             (b"HTTP/1.1 501 NOT IMPLEMENTED\r\n\r\n".to_vec(), None)
         };
 
-        let mut flag = CowRpcErrorCode::Success;
-        {
+        let flag = {
             if let Some(mut identity) = identity_opt {
                 // den is a special case. Only one peer should be identified with den. Nobody should be able
                 // to request the den identity (except the den itself of course) since a pop-token has been validated.
@@ -201,19 +200,20 @@ impl CowRpcRouterPeer {
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
                         *self.identity.write() = Some(identity);
+                        CowRpcErrorCode::Success
                     }
                     Err(e) => {
                         warn!(
                             self.logger,
                             "Unable to add Identity {} the the router cache : {:?}", identity.name, e
                         );
-                        flag = CowRpcErrorCode::Unavailable;
+                        CowRpcErrorCode::Unavailable
                     }
                 }
             } else {
-                flag = CowRpcErrorCode::Unauthorized;
+                CowRpcErrorCode::Unauthorized
             }
-        }
+        };
 
         self.send_verify_rsp(flag.into(), msg, rsp).await?;
         Ok(())

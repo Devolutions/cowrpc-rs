@@ -13,6 +13,7 @@ use slog::{debug, error, trace, Logger};
 use std::cmp::min;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
@@ -42,9 +43,9 @@ impl WsPingConfig {
 }
 #[derive(Clone)]
 struct ServerWebSocketPingUtils {
-    send_ping: Arc<Mutex<bool>>,
-    ping_expired: Arc<Mutex<bool>>,
-    waiting_pong: Arc<Mutex<bool>>,
+    send_ping: Arc<AtomicBool>,
+    ping_expired: Arc<AtomicBool>,
+    waiting_pong: Arc<AtomicBool>,
     send_ping_error: Arc<Mutex<Option<TransportError>>>,
     ping_interval: Duration,
     ws_sink: Arc<AsyncMutex<WsSink>>,
@@ -54,9 +55,9 @@ struct ServerWebSocketPingUtils {
 impl ServerWebSocketPingUtils {
     fn new(config: &WsPingConfig, ws_sink: Arc<AsyncMutex<WsSink>>, logger: Logger) -> Self {
         ServerWebSocketPingUtils {
-            send_ping: Arc::new(Mutex::new(true)),
-            ping_expired: Arc::new(Mutex::new(false)),
-            waiting_pong: Arc::new(Mutex::new(false)),
+            send_ping: Arc::new(AtomicBool::new(true)),
+            ping_expired: Arc::new(AtomicBool::new(false)),
+            waiting_pong: Arc::new(AtomicBool::new(false)),
             send_ping_error: Arc::new(Mutex::new(None)),
             ping_interval: config.ping_interval,
             ws_sink,
@@ -66,7 +67,7 @@ impl ServerWebSocketPingUtils {
 
     fn check_ping(&self, waker: Waker) -> Result<()> {
         // Error if ping has expired
-        if *self.ping_expired.lock() {
+        if self.ping_expired.load(Ordering::Acquire) {
             return Err(CowRpcError::Timeout);
         }
 
@@ -76,10 +77,9 @@ impl ServerWebSocketPingUtils {
             return Err(error.into());
         }
 
-        let mut send_ping = self.send_ping.lock();
-        if *send_ping {
+        if self.send_ping.load(Ordering::Acquire) {
             self.send_ping(waker);
-            *send_ping = false;
+            self.send_ping.store(false, Ordering::Release);
         }
 
         Ok(())
@@ -104,19 +104,19 @@ impl ServerWebSocketPingUtils {
                     let ping_expired_instant = now + Duration::from_secs(PING_TIMEOUT);
                     let next_ping = now + ping_utils.ping_interval;
 
-                    *ping_utils.waiting_pong.lock() = true;
+                    ping_utils.waiting_pong.store(true, Ordering::Release);
 
                     tokio::time::delay_until(ping_expired_instant).await;
 
-                    if *ping_utils.waiting_pong.lock() {
-                        *ping_utils.ping_expired.lock() = true;
+                    if ping_utils.waiting_pong.load(Ordering::Acquire) {
+                        ping_utils.ping_expired.store(true, Ordering::Release);
                         waker.clone().wake();
                         return;
                     }
 
                     tokio::time::delay_until(next_ping).await;
 
-                    *ping_utils.send_ping.lock() = true;
+                    ping_utils.send_ping.store(true, Ordering::Release);
 
                     waker.wake();
                 }
@@ -130,7 +130,7 @@ impl ServerWebSocketPingUtils {
 
     fn pong_received(&self) {
         trace!(self.logger, "WS_PONG received");
-        *self.waiting_pong.lock() = false;
+        self.waiting_pong.store(false, Ordering::Release);
     }
 }
 

@@ -22,7 +22,7 @@ type HttpMsgCallback = dyn Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8
 
 static COWRPC_REQ_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum CowRpcState {
     Active,
     Terminate,
@@ -148,6 +148,7 @@ impl CowRpcPeer {
             Err(_) => Err(CowRpcError::Cancel),
         }
     }
+
     pub async fn call_http(&self, remote_id: u32, http_req: Vec<u8>, timeout: Duration) -> Result<Vec<u8>> {
         let (tx, rx) = channel();
         let id = COWRPC_REQ_ID_GENERATOR.fetch_add(1, atomic::Ordering::SeqCst);

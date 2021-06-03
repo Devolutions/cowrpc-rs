@@ -11,7 +11,7 @@ use std::task::{Context, Poll};
 #[derive(Clone)]
 pub struct Adaptor {
     messages: Arc<Mutex<VecDeque<CowRpcMessage>>>,
-    waker: Arc<Mutex<Option<Waker>>>, //current_task: Arc<Mutex<Option<Task>>>,
+    waker: Arc<Mutex<Option<Waker>>>,
 }
 
 impl Default for Adaptor {
@@ -41,7 +41,7 @@ impl MessageInjector for Adaptor {
 
             let waker = self.waker.lock();
 
-            if let Some(ref waker) = &*waker {
+            if let Some(waker) = &*waker {
                 waker.wake_by_ref();
             }
         }

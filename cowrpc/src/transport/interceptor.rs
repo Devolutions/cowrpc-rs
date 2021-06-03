@@ -10,16 +10,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use url::Url;
 
+#[derive(Clone)]
 pub struct InterceptorTransport {
     pub inter: Box<dyn MessageInterceptor>,
-}
-
-impl Clone for InterceptorTransport {
-    fn clone(&self) -> Self {
-        InterceptorTransport {
-            inter: self.inter.clone_boxed(),
-        }
-    }
 }
 
 #[async_trait]

@@ -37,7 +37,7 @@ type PeerConnectionCallback = dyn Fn(u32) + Send + Sync;
 type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> BoxFuture<'static, ()> + Send + Sync;
 pub type PeersAreAliveCallback = dyn Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum RouterState {
     Init,
     Running,
@@ -71,7 +71,7 @@ impl RouterHandle {
     fn wait_state(&self, waiting_state: RouterState) -> WaitRouterState {
         WaitRouterState {
             registered: false,
-            state: self.clone(),
+            handle: self.clone(),
             waiting_state,
         }
     }
@@ -104,7 +104,7 @@ impl RouterHandle {
 }
 
 pub struct WaitRouterState {
-    state: RouterHandle,
+    handle: RouterHandle,
     waiting_state: RouterState,
     registered: bool,
 }
@@ -115,11 +115,11 @@ impl Future for WaitRouterState {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         if !this.registered {
-            this.state.register(this.waiting_state.clone(), cx.waker().clone());
+            this.handle.register(this.waiting_state.clone(), cx.waker().clone());
             this.registered = true;
         }
 
-        if this.state.get_state() == this.waiting_state {
+        if this.handle.get_state() == this.waiting_state {
             Poll::Ready(())
         } else {
             Poll::Pending
