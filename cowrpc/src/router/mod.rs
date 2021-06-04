@@ -115,7 +115,7 @@ impl Future for WaitRouterState {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         if !this.registered {
-            this.handle.register(this.waiting_state.clone(), cx.waker().clone());
+            this.handle.register(this.waiting_state, cx.waker().clone());
             this.registered = true;
         }
 
