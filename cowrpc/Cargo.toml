@@ -6,6 +6,7 @@ authors = ["François Dubois <fdubois@devolutions.net>, Richer Archambault <rarc
 edition = "2018"
 
 [dependencies]
+atomig = {version = "0.2", features = ["derive"]}
 async-trait = "0.1"
 byteorder = "1.4"
 bufstream = "0.1"

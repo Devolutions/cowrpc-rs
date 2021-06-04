@@ -7,11 +7,12 @@ use crate::router::router_peer::{
 use crate::transport::adaptor::Adaptor;
 use crate::transport::{CowRpcListener, CowRpcTransport, ListenerBuilder, MessageInterceptor, TlsOptions, Transport};
 use crate::{proto, CowRpcMessageInterceptor};
+use atomig::{Atom, Atomic, Ordering};
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::StreamExt;
 use mouscache::{Cache, CacheFunc};
-use parking_lot::{Mutex as SyncMutex, RwLock as SyncRwLock};
+use parking_lot::Mutex as SyncMutex;
 use slog::{debug, error, info, o, trace, warn, Drain, Logger};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -37,7 +38,8 @@ type PeerConnectionCallback = dyn Fn(u32) + Send + Sync;
 type PeerDisconnectionCallback = dyn Fn(u32, Option<CowRpcIdentity>) -> BoxFuture<'static, ()> + Send + Sync;
 pub type PeersAreAliveCallback = dyn Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Atom, Clone, Copy, PartialEq)]
+#[repr(u8)]
 pub enum RouterState {
     Init,
     Running,
@@ -47,14 +49,14 @@ pub enum RouterState {
 
 #[derive(Clone)]
 pub struct RouterHandle {
-    state: Arc<SyncRwLock<RouterState>>,
+    state: Arc<Atomic<RouterState>>,
     wakers: Arc<SyncMutex<Vec<(RouterState, Waker)>>>,
 }
 
 impl RouterHandle {
     fn new() -> Self {
         RouterHandle {
-            state: Arc::new(SyncRwLock::new(RouterState::Init)),
+            state: Arc::new(Atomic::new(RouterState::Init)),
             wakers: Arc::new(SyncMutex::new(Vec::new())),
         }
     }
@@ -77,11 +79,11 @@ impl RouterHandle {
     }
 
     fn get_state(&self) -> RouterState {
-        self.state.read().clone()
+        self.state.load(Ordering::Acquire)
     }
 
     fn update_state(&self, new_state: RouterState) {
-        let mut state_writer = self.state.write();
+        self.state.store(new_state, Ordering::Release);
         let mut wakers = self.wakers.lock();
 
         let mut i = 0;
@@ -94,8 +96,6 @@ impl RouterHandle {
                 i += 1;
             }
         }
-
-        *state_writer = new_state;
     }
 
     fn register(&mut self, waiting_state: RouterState, waker: Waker) {

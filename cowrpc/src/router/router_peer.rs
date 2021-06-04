@@ -4,6 +4,7 @@ use crate::proto;
 use crate::proto::*;
 use crate::router::RouterShared;
 use crate::transport::{CowSink, CowStream};
+use atomig::{Atom, Atomic, Ordering};
 use futures::prelude::*;
 use futures::stream::StreamExt;
 use parking_lot::RwLock as SyncRwLock;
@@ -11,7 +12,7 @@ use slog::{debug, error, o, warn, Logger};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
+use tokio::sync::{Mutex, RwLockReadGuard};
 
 pub(crate) struct CowRpcRouterPeer {
     inner: Arc<CowRpcRouterPeerSenderInner>,
@@ -31,7 +32,7 @@ impl CowRpcRouterPeer {
         let inner = Arc::new(CowRpcRouterPeerSenderInner {
             cow_id,
             writer_sink: Mutex::new(sink),
-            state: RwLock::new(CowRpcRouterPeerState::Connected),
+            state: Atomic::new(CowRpcRouterPeerState::Connected),
         });
 
         let logger = router.logger.new(o!("peer_id" => cow_id));
@@ -74,7 +75,7 @@ impl CowRpcRouterPeer {
                 }
             }
 
-            match &*self.inner.state.read().await {
+            match &self.inner.state.load(Ordering::Acquire) {
                 CowRpcRouterPeerState::Error => {
                     return Err((
                         self.get_cow_id(),
@@ -281,7 +282,9 @@ impl CowRpcRouterPeer {
     }
 
     async fn process_terminate_req(&mut self, _: CowRpcHdr) -> Result<()> {
-        *self.inner.state.write().await = CowRpcRouterPeerState::Terminated;
+        self.inner
+            .state
+            .store(CowRpcRouterPeerState::Terminated, Ordering::Release);
         self.send_terminate_rsp().await?;
 
         // Close the sink, it will send the close message on websocket
@@ -290,7 +293,9 @@ impl CowRpcRouterPeer {
     }
 
     async fn process_terminate_rsp(&mut self, _: CowRpcHdr) -> Result<()> {
-        *self.inner.state.write().await = CowRpcRouterPeerState::Terminated;
+        self.inner
+            .state
+            .store(CowRpcRouterPeerState::Terminated, Ordering::Release);
 
         // Close the sink, it will send the close message on websocket
         self.inner.writer_sink.lock().await.close().await?;
@@ -411,7 +416,7 @@ impl CowRpcRouterPeerSender {
         CowRpcRouterPeerSender {
             inner: Arc::new(CowRpcRouterPeerSenderInner {
                 cow_id,
-                state: RwLock::new(state),
+                state: Atomic::new(state),
                 writer_sink: Mutex::new(writer_sink),
             }),
         }
@@ -428,13 +433,13 @@ impl Deref for CowRpcRouterPeerSender {
 
 pub struct CowRpcRouterPeerSenderInner {
     cow_id: u32,
-    state: RwLock<CowRpcRouterPeerState>,
+    state: Atomic<CowRpcRouterPeerState>,
     writer_sink: Mutex<CowSink<CowRpcMessage>>,
 }
 
 impl CowRpcRouterPeerSenderInner {
     pub(crate) async fn set_connection_error(&self) {
-        *self.state.write().await = CowRpcRouterPeerState::Error;
+        self.state.store(CowRpcRouterPeerState::Error, Ordering::Release);
     }
 
     pub(crate) async fn send_messages(&self, msg: CowRpcMessage) -> Result<()> {
@@ -467,6 +472,8 @@ impl<'a> Deref for CowRpcRouterPeerSenderGuard<'a> {
     }
 }
 
+#[derive(Atom)]
+#[repr(u8)]
 pub(crate) enum CowRpcRouterPeerState {
     Connected,
     Terminated,
