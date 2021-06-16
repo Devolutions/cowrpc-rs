@@ -14,6 +14,8 @@ pub mod peer;
 pub mod router;
 
 mod proto;
+
+pub use crate::transport::TlsOptions;
 mod transport;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

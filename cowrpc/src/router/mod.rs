@@ -5,8 +5,8 @@ use crate::router::router_peer::{
     CowRpcRouterPeer, CowRpcRouterPeerSender, CowRpcRouterPeerSenderGuard, CowRpcRouterPeerState,
 };
 use crate::transport::adaptor::Adaptor;
-use crate::transport::{CowRpcListener, CowRpcTransport, ListenerBuilder, MessageInterceptor, TlsOptions, Transport};
-use crate::{proto, CowRpcMessageInterceptor};
+use crate::transport::{CowRpcListener, CowRpcTransport, ListenerBuilder, MessageInterceptor, Transport};
+use crate::{proto, CowRpcMessageInterceptor, TlsOptions};
 use atomig::{Atom, Atomic, Ordering};
 use futures::future::BoxFuture;
 use futures::prelude::*;
@@ -190,24 +190,25 @@ impl CowRpcRouterBuilder {
         self
     }
 
-    pub fn tls_options(mut self, tls_options: TlsOptions) -> Self {
-        self.tls_options = Some(tls_options);
+    pub fn tls_options(mut self, tls_options: impl Into<Option<TlsOptions>>) -> Self {
+        self.tls_options = tls_options.into();
         self
     }
 
     pub fn peers_are_alive_callback<F: 'static + Fn(&[u32]) -> BoxFuture<'_, ()> + Send + Sync>(
-        &mut self,
+        mut self,
         interval: Duration,
         callback: F,
-    ) {
+    ) -> Self {
         self.peers_are_alive_task_info = Some(PeersAreAliveTaskInfo {
             callback: Box::new(callback),
             interval,
         });
+        self
     }
 
-    pub fn keep_alive_interval(mut self, keep_alive_interval: Duration) -> Self {
-        self.keep_alive_interval = Some(keep_alive_interval);
+    pub fn keep_alive_interval(mut self, keep_alive_interval: impl Into<Option<Duration>>) -> Self {
+        self.keep_alive_interval = keep_alive_interval.into();
         self
     }
 

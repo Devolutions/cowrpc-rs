@@ -3,6 +3,7 @@ use crate::proto::{Message, *};
 use crate::transport::{CowRpcTransport, CowRpcTransportError, CowSink, CowStream, Transport};
 use crate::{proto, CowRpcCallContext, CowRpcIdentityType};
 use futures::channel::oneshot::{channel, Sender as AsyncSender};
+use futures::future::BoxFuture;
 use futures::prelude::*;
 use slog::{error, o, Drain, Logger};
 use std::str::FromStr;
@@ -17,7 +18,7 @@ mod handshake;
 
 const DEFAULT_CONNECTION_TIMEOUT: u64 = 30;
 
-pub type CallFuture<T> = Box<dyn Future<Output = std::result::Result<T, ()>> + Unpin + Send>;
+pub type CallFuture<'a, T> = BoxFuture<'a, std::result::Result<T, ()>>;
 type HttpMsgCallback = dyn Fn(CowRpcCallContext, &mut [u8]) -> CallFuture<Vec<u8>> + Send + Sync;
 
 static COWRPC_REQ_ID_GENERATOR: AtomicUsize = AtomicUsize::new(0);
@@ -381,9 +382,9 @@ impl CowRpcPeer {
         let res_fut = if let Some(ref cb) = self.config.on_http_msg_callback {
             (**cb)(CowRpcCallContext::new(header.src_id), payload)
         } else {
-            Box::new(future::ok::<Vec<u8>, ()>(
+            Box::pin(future::ok::<Vec<u8>, ()>(
                 b"HTTP/1.1 501 Not Implemented\r\n\r\n".to_vec(),
-            )) as CallFuture<Vec<u8>>
+            ))
         };
 
         let self_clone = self.clone();

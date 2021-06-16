@@ -5,7 +5,7 @@ extern crate tls_api;
 
 use cowrpc::peer::{CallFuture, CowRpcPeer};
 use cowrpc::CowRpcCallContext;
-
+use futures::FutureExt;
 use log::info;
 use std::time::Duration;
 
@@ -36,5 +36,5 @@ fn on_http_call(ctx: CowRpcCallContext, request: &mut [u8]) -> CallFuture<Vec<u8
     let req_string = String::from_utf8_lossy(request).to_string();
     info!("HTTP call received from {}: \r\n {}", ctx.get_caller_id(), req_string);
 
-    Box::new(futures::future::ok(b"HTTP/1.1 200 OK\r\n\r\n".to_vec()))
+    futures::future::ok(b"HTTP/1.1 200 OK\r\n\r\n".to_vec()).boxed()
 }
