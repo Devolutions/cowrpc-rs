@@ -65,7 +65,7 @@ fn on_http_call(_ctx: CowRpcCallContext, request: &mut [u8]) -> CallFuture<Vec<u
             assert!(false, "Unknown request");
         }
     }
-    Box::new(futures::future::ok(HTTP_RESPONSE.to_vec()))
+    futures::future::ok(HTTP_RESPONSE.to_vec()).boxed()
 }
 
 async fn start_client() -> Result<CowRpcPeer, CowRpcError> {
