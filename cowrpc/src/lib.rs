@@ -15,8 +15,8 @@ pub mod router;
 
 mod proto;
 
-pub use crate::transport::TlsOptions;
 mod transport;
+pub use self::transport::TlsOptions;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum CowRpcMode {

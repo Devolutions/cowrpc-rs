@@ -252,7 +252,7 @@ impl CowRpcRouterPeer {
 
                 if identity.eq("den") {
                     // Old Wayk Agent try to resolve den. We return the router_id with a success. If somebody try to send something to that ID,
-                    // the message will not be forwarded anyway since nobody has the ID 0 on the router
+                    // the message will not be forwarded anyway since no peer has the ID 0 on the router
                     msg_clone.node_id = self.router.id;
                     flag = CowRpcErrorCode::Success.into();
                 } else {
