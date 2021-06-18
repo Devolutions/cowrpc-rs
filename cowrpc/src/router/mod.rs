@@ -610,7 +610,7 @@ impl RouterSharedInner {
             let msg_clone = msg.clone();
             if let Some(sender) = self.find_sender(dst_id).await {
                 if let Err(e) = sender.send_messages(msg_clone).await {
-                    warn!(self.logger, "Send message to peer ID {} failed: {}", dst_id, e);
+                    warn!(self.logger, "Send message to peer ID {:#010X} failed: {}", dst_id, e);
                     sender.set_connection_error().await;
                 } else {
                     return;
@@ -620,7 +620,7 @@ impl RouterSharedInner {
 
         warn!(
             self.logger,
-            "Host unreachable, message can't be forwarded. (msgType={}, srcId={}, dstId={})",
+            "Unknown host, message can't be forwarded. (msgType={}, srcId={:#010X}, dstId={:#010X})",
             msg.get_msg_name(),
             msg.get_src_id(),
             dst_id
@@ -653,7 +653,7 @@ impl RouterSharedInner {
                         msg_clone.add_flag(COW_RPC_FLAG_RESPONSE | flag);
 
                         if let Err(e) = sender.send_messages(msg_clone).await {
-                            warn!(self.logger, "Send message to peer ID {} failed: {}", src_id, e);
+                            warn!(self.logger, "Send message to peer ID {:#010X} failed: {}", src_id, e);
                             sender.set_connection_error().await;
                         }
                     }
@@ -691,7 +691,10 @@ impl RouterSharedInner {
                 .send_messages(CowRpcMessage::Result(header, msg, Vec::new()))
                 .await
             {
-                warn!(self.logger, "Send message to peer ID {} failed: {}", header.src_id, e);
+                warn!(
+                    self.logger,
+                    "Send message to peer ID {:#010X} failed: {}", header.src_id, e
+                );
                 sender.set_connection_error().await;
             }
         }
@@ -706,7 +709,7 @@ impl RouterSharedInner {
                             self.cache.remove_cow_identity(identity, peer_id)
                         } else {
                             Err(CowRpcError::Internal(format!(
-                                "Identity {} already belongs to another peer {}",
+                                "Identity {} already belongs to another peer {:#010X}",
                                 identity.name, cow_id
                             )))
                         }
@@ -865,7 +868,7 @@ impl RouterCache {
 
         if got_error {
             return Err(CowRpcError::Internal(format!(
-                "Unable to cleam record of identity {} to peer {:#010X}",
+                "Unable to clean record of identity {} to peer {:#010X}",
                 identity.name, peer_id
             )));
         }

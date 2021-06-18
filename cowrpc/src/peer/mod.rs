@@ -105,8 +105,7 @@ impl CowRpcPeer {
             Ok(connect_result) => {
                 let transport = connect_result?;
                 let (reader_stream, writer_sink) = transport.message_stream_sink();
-                let peer = handshake::handshake(config, reader_stream, writer_sink, logger).await?;
-                peer
+                handshake::handshake(config, reader_stream, writer_sink, logger).await?
             }
             Err(_) => {
                 return Err(CowRpcError::Timeout);
