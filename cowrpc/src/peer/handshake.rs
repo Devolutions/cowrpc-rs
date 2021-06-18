@@ -4,7 +4,7 @@ use crate::proto::{CowRpcHandshakeMsg, CowRpcHdr};
 use crate::transport::{CowSink, CowStream};
 use crate::{proto, CowRpcMessage, Message};
 use futures::SinkExt;
-use slog::Logger;
+use slog::{o, Logger};
 use std::sync::Arc;
 use tokio::stream::StreamExt;
 use tokio::sync::{Mutex, RwLock};
@@ -18,6 +18,11 @@ pub(crate) async fn handshake(
     send_handshake_req(&mut sink).await?;
     let (router_id, peer_id) = wait_handshake_rsp(&mut stream).await?;
 
+    let peer_logger =
+        logger.new(o!("router_id" => format!("{:#010X}", router_id), "peer_id" => format!("{:#010X}", peer_id)));
+    sink.set_logger(peer_logger.clone());
+    stream.set_logger(peer_logger.clone());
+
     let writer = CowRpcPeerWriter { writer_sink: sink };
 
     let peer = CowRpcPeer {
@@ -28,7 +33,7 @@ pub(crate) async fn handshake(
         pending_requests: Arc::new(Mutex::new(Vec::new())),
         writer: Arc::new(RwLock::new(writer)),
         msg_task_handle: Arc::new(Mutex::new(None)),
-        logger,
+        logger: peer_logger,
     };
 
     Ok(CowRpcPeerInner { peer, reader: stream })

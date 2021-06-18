@@ -1,6 +1,6 @@
 use crate::error::CowRpcError;
 use crate::transport::tcp::TcpTransport;
-use crate::transport::{CowFuture, CowStream, Listener, MessageInterceptor};
+use crate::transport::{BoxStream, CowFuture, Listener, MessageInterceptor};
 use async_trait::async_trait;
 use futures::future;
 use slog::Logger;
@@ -33,7 +33,7 @@ impl Listener for TcpListener {
         }
     }
 
-    async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
+    async fn incoming(self) -> BoxStream<CowFuture<Self::TransportInstance>> {
         let TcpListener {
             listener,
             transport_cb_handler,
@@ -45,7 +45,7 @@ impl Listener for TcpListener {
             let cbh = transport_cb_handler.clone();
             let logger_clone = logger.clone();
             Ok(Box::pin(future::ok(TcpTransport::new(tcp_stream, cbh, logger_clone))) as CowFuture<TcpTransport>)
-        })) as CowStream<CowFuture<Self::TransportInstance>>
+        })) as BoxStream<CowFuture<Self::TransportInstance>>
     }
 
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {

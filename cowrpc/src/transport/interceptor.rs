@@ -1,6 +1,8 @@
 use crate::error::{CowRpcError, Result};
 use crate::proto::CowRpcMessage;
-use crate::transport::{CowSink, CowStream, MessageInterceptor, Transport, TransportError};
+use crate::transport::{
+    CowSink, CowStream, LoggerObject, MessageInterceptor, SinkAndLog, StreamAndLog, Transport, TransportError,
+};
 use async_trait::async_trait;
 use futures::prelude::*;
 use slog::Logger;
@@ -94,6 +96,12 @@ impl Sink<CowRpcMessage> for InterceptorSink {
     }
 }
 
+impl LoggerObject for InterceptorSink {
+    fn set_logger(&mut self, _: Logger) {}
+}
+
+impl SinkAndLog<CowRpcMessage> for InterceptorSink {}
+
 struct InterceptorStream {}
 
 impl Stream for InterceptorStream {
@@ -103,3 +111,9 @@ impl Stream for InterceptorStream {
         Poll::Ready(Some(Err(CowRpcError::Internal("Should never be used".to_string()))))
     }
 }
+
+impl LoggerObject for InterceptorStream {
+    fn set_logger(&mut self, _: Logger) {}
+}
+
+impl StreamAndLog for InterceptorStream {}

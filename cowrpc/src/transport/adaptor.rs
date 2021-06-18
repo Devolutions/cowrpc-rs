@@ -24,7 +24,7 @@ impl Default for Adaptor {
 }
 
 impl Adaptor {
-    pub fn message_stream(&self) -> CowStream<CowRpcMessage> {
+    pub fn message_stream(&self) -> BoxStream<CowRpcMessage> {
         Box::pin(AdaptorStream {
             messages: self.messages.clone(),
             waker: self.waker.clone(),

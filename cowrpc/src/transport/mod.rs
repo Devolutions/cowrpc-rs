@@ -22,9 +22,18 @@ mod utils;
 mod websocket;
 mod websocket_listener;
 
+pub trait LoggerObject {
+    fn set_logger(&mut self, logger: Logger);
+}
+
+pub trait StreamAndLog: Stream + LoggerObject + Unpin {}
+
+pub trait SinkAndLog<T>: Sink<T> + LoggerObject + Unpin {}
+
 pub type CowFuture<T> = Pin<Box<dyn Future<Output = Result<T>> + Send + Sync>>;
-pub type CowStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send + Sync>>;
-pub type CowSink<T> = Pin<Box<dyn Sink<T, Error = CowRpcError> + Send + Sync>>;
+pub type BoxStream<T> = Pin<Box<dyn Stream<Item = Result<T>> + Send + Sync>>;
+pub type CowSink<T> = Pin<Box<dyn SinkAndLog<T, Error = CowRpcError> + Send + Sync>>;
+pub type CowStream<T> = Pin<Box<dyn StreamAndLog<Item = Result<T>> + Send + Sync>>;
 
 /// A set of options for a TLS connection.
 pub struct TlsOptions {
@@ -139,7 +148,7 @@ pub trait Listener {
     async fn bind(interface: &SocketAddr, tls_connector: Option<TlsAcceptor>, logger: Logger) -> Result<Self>
     where
         Self: Sized;
-    async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>>;
+    async fn incoming(self) -> BoxStream<CowFuture<Self::TransportInstance>>;
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>);
     fn set_executor_handle(&mut self) {
         /* just drop it */
@@ -239,7 +248,7 @@ pub enum CowRpcListener {
 }
 
 impl CowRpcListener {
-    pub async fn incoming(self) -> CowStream<CowFuture<CowRpcTransport>> {
+    pub async fn incoming(self) -> BoxStream<CowFuture<CowRpcTransport>> {
         match self {
             CowRpcListener::Tcp(tcp) => {
                 let incoming = tcp.incoming().await;
@@ -248,7 +257,7 @@ impl CowRpcListener {
                     let cow_fut = Box::pin(fut.and_then(|transport| future::ok(CowRpcTransport::Tcp(transport))))
                         as CowFuture<CowRpcTransport>;
                     Ok(cow_fut)
-                })) as CowStream<CowFuture<CowRpcTransport>>
+                })) as BoxStream<CowFuture<CowRpcTransport>>
             }
             CowRpcListener::WebSocket(ws) => {
                 let incoming = ws.incoming().await;
@@ -258,7 +267,7 @@ impl CowRpcListener {
                         Box::pin(fut.and_then(|transport| future::ok(CowRpcTransport::WebSocket(Box::new(transport)))))
                             as CowFuture<CowRpcTransport>;
                     Ok(cow_fut)
-                })) as CowStream<CowFuture<CowRpcTransport>>
+                })) as BoxStream<CowFuture<CowRpcTransport>>
             }
         }
     }

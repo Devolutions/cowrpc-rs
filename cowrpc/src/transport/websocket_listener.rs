@@ -1,6 +1,6 @@
 use crate::error::{CowRpcError, Result};
 use crate::transport::websocket::{CowWebSocketStream, WebSocketTransport};
-use crate::transport::{CowFuture, CowStream, Listener, MessageInterceptor, TransportError};
+use crate::transport::{BoxStream, CowFuture, Listener, MessageInterceptor, TransportError};
 use async_trait::async_trait;
 use async_tungstenite::tokio::accept_async;
 use slog::Logger;
@@ -34,7 +34,7 @@ impl Listener for WebSocketListener {
         }
     }
 
-    async fn incoming(self) -> CowStream<CowFuture<Self::TransportInstance>> {
+    async fn incoming(self) -> BoxStream<CowFuture<Self::TransportInstance>> {
         let WebSocketListener {
             listener,
             tls_acceptor,
@@ -51,7 +51,7 @@ impl Listener for WebSocketListener {
                 Box::pin(accept_stream(tcp_stream, tls_acceptor.clone(), cbh, logger_clone))
                     as CowFuture<Self::TransportInstance>,
             )
-        })) as CowStream<CowFuture<Self::TransportInstance>>
+        })) as BoxStream<CowFuture<Self::TransportInstance>>
     }
 
     fn set_msg_interceptor(&mut self, cb_handler: Box<dyn MessageInterceptor>) {
