@@ -77,7 +77,7 @@ impl Sink<CowRpcMessage> for InterceptorSink {
 
         if let Some(msg) = this.inter.before_send(item) {
             Err(TransportError::EndpointUnreachable(format!(
-                "Unable to send msg {} trought interceptor, peer {} is inside this router",
+                "Unable to send msg {} trought interceptor, peer {:#010X} is inside this router",
                 msg.get_msg_name(),
                 msg.get_dst_id()
             ))
