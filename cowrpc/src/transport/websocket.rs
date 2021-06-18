@@ -1,6 +1,9 @@
 use crate::error::{CowRpcError, Result};
 use crate::proto::{CowRpcMessage, Message};
-use crate::transport::{CowRpcTransportError, CowSink, CowStream, MessageInterceptor, Transport, TransportError};
+use crate::transport::{
+    CowRpcTransportError, CowSink, CowStream, LoggerObject, MessageInterceptor, SinkAndLog, StreamAndLog, Transport,
+    TransportError,
+};
 use async_trait::async_trait;
 use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
 use async_tungstenite::tungstenite::{Error as WsError, Message as WsMessage};
@@ -406,6 +409,18 @@ impl Stream for CowMessageStream {
     }
 }
 
+impl LoggerObject for CowMessageStream {
+    fn get_logger(&self) -> Logger {
+        self.logger.clone()
+    }
+
+    fn set_logger(&mut self, logger: Logger) {
+        self.logger = logger;
+    }
+}
+
+impl StreamAndLog for CowMessageStream {}
+
 struct CowMessageSink {
     sink: Arc<AsyncMutex<WsSink>>,
     data_to_send: Vec<u8>,
@@ -486,3 +501,15 @@ impl Sink<CowRpcMessage> for CowMessageSink {
             .map_err(|e| CowRpcTransportError::from(e).into())
     }
 }
+
+impl LoggerObject for CowMessageSink {
+    fn get_logger(&self) -> Logger {
+        self.logger.clone()
+    }
+
+    fn set_logger(&mut self, logger: Logger) {
+        self.logger = logger;
+    }
+}
+
+impl SinkAndLog<CowRpcMessage> for CowMessageSink {}

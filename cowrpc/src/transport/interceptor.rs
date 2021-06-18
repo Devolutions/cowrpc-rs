@@ -1,9 +1,11 @@
 use crate::error::{CowRpcError, Result};
 use crate::proto::CowRpcMessage;
-use crate::transport::{CowSink, CowStream, MessageInterceptor, Transport, TransportError};
+use crate::transport::{
+    CowSink, CowStream, LoggerObject, MessageInterceptor, SinkAndLog, StreamAndLog, Transport, TransportError,
+};
 use async_trait::async_trait;
 use futures::prelude::*;
-use slog::Logger;
+use slog::{o, Drain, Logger};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -94,6 +96,16 @@ impl Sink<CowRpcMessage> for InterceptorSink {
     }
 }
 
+impl LoggerObject for InterceptorSink {
+    fn get_logger(&self) -> Logger {
+        slog::Logger::root(slog_stdlog::StdLog.fuse(), o!())
+    }
+
+    fn set_logger(&mut self, _: Logger) {}
+}
+
+impl SinkAndLog<CowRpcMessage> for InterceptorSink {}
+
 struct InterceptorStream {}
 
 impl Stream for InterceptorStream {
@@ -103,3 +115,13 @@ impl Stream for InterceptorStream {
         Poll::Ready(Some(Err(CowRpcError::Internal("Should never be used".to_string()))))
     }
 }
+
+impl LoggerObject for InterceptorStream {
+    fn get_logger(&self) -> Logger {
+        slog::Logger::root(slog_stdlog::StdLog.fuse(), o!())
+    }
+
+    fn set_logger(&mut self, _: Logger) {}
+}
+
+impl StreamAndLog for InterceptorStream {}

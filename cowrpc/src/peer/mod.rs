@@ -94,7 +94,7 @@ impl CowRpcPeer {
         let logger = config
             .logger
             .clone()
-            .unwrap_or_else(|| slog::Logger::root(slog_stdlog::StdLog.fuse(), o!()));
+            .unwrap_or_else(|| slog::Logger::root(slog_stdlog::StdLog.fuse(), o!("type" => "peer")));
 
         let peer_inner = match tokio::time::timeout(
             config.connection_timeout,

@@ -1,6 +1,8 @@
 use crate::error::CowRpcError;
 use crate::proto::{CowRpcMessage, Message};
-use crate::transport::{CowSink, CowStream, MessageInterceptor, Transport, TransportError};
+use crate::transport::{
+    CowSink, CowStream, LoggerObject, MessageInterceptor, SinkAndLog, StreamAndLog, Transport, TransportError,
+};
 use async_trait::async_trait;
 use byteorder::{LittleEndian, ReadBytesExt};
 use futures::prelude::*;
@@ -188,6 +190,18 @@ impl Stream for CowMessageStream {
     }
 }
 
+impl LoggerObject for CowMessageStream {
+    fn get_logger(&self) -> Logger {
+        self.logger.clone()
+    }
+
+    fn set_logger(&mut self, logger: Logger) {
+        self.logger = logger;
+    }
+}
+
+impl StreamAndLog for CowMessageStream {}
+
 pub struct CowMessageSink {
     pub stream: OwnedWriteHalf,
     pub data_to_send: Vec<u8>,
@@ -239,3 +253,15 @@ impl Sink<CowRpcMessage> for CowMessageSink {
         Poll::Ready(Ok(()))
     }
 }
+
+impl LoggerObject for CowMessageSink {
+    fn get_logger(&self) -> Logger {
+        self.logger.clone()
+    }
+
+    fn set_logger(&mut self, logger: Logger) {
+        self.logger = logger;
+    }
+}
+
+impl SinkAndLog<CowRpcMessage> for CowMessageSink {}

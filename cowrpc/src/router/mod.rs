@@ -229,7 +229,7 @@ impl CowRpcRouterBuilder {
             .unwrap_or_else(|| {
                 slog::Logger::root(
                     slog_stdlog::StdLog.fuse(),
-                    o!("router_id" => format!("{:#010X}", router_id)),
+                    o!("type" => "router", "router_id" => format!("{:#010X}", router_id)),
                 )
             });
 

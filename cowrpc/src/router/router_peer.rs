@@ -200,6 +200,7 @@ impl CowRpcRouterPeer {
                 let cow_id = self.get_cow_id();
                 match cache.add_cow_identity(&identity, cow_id) {
                     Ok(_) => {
+                        self.update_loggers(&identity.name).await;
                         *self.identity.write() = Some(identity);
                         CowRpcErrorCode::Success
                     }
@@ -403,6 +404,20 @@ impl CowRpcRouterPeer {
 
     async fn send_messages(&mut self, msg: CowRpcMessage) -> Result<()> {
         self.inner.writer_sink.lock().await.send(msg).await
+    }
+
+    async fn update_loggers(&mut self, den_id: &str) {
+        let stream_logger = self.reader_stream.get_logger().new(o!("den_id" => den_id.to_owned()));
+        self.reader_stream.set_logger(stream_logger);
+
+        {
+            let mut sink = self.inner.writer_sink.lock().await;
+            let sink_logger = sink.get_logger().new(o!("den_id" => den_id.to_owned()));
+            sink.set_logger(sink_logger);
+        }
+
+        let logger = self.logger.new(o!("den_id" => den_id.to_owned()));
+        self.logger = logger;
     }
 }
 
