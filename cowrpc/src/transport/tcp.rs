@@ -191,6 +191,10 @@ impl Stream for CowMessageStream {
 }
 
 impl LoggerObject for CowMessageStream {
+    fn get_logger(&self) -> Logger {
+        self.logger.clone()
+    }
+
     fn set_logger(&mut self, logger: Logger) {
         self.logger = logger;
     }
@@ -251,6 +255,10 @@ impl Sink<CowRpcMessage> for CowMessageSink {
 }
 
 impl LoggerObject for CowMessageSink {
+    fn get_logger(&self) -> Logger {
+        self.logger.clone()
+    }
+
     fn set_logger(&mut self, logger: Logger) {
         self.logger = logger;
     }

@@ -5,7 +5,7 @@ use crate::transport::{
 };
 use async_trait::async_trait;
 use futures::prelude::*;
-use slog::Logger;
+use slog::{o, Drain, Logger};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -97,6 +97,10 @@ impl Sink<CowRpcMessage> for InterceptorSink {
 }
 
 impl LoggerObject for InterceptorSink {
+    fn get_logger(&self) -> Logger {
+        slog::Logger::root(slog_stdlog::StdLog.fuse(), o!())
+    }
+
     fn set_logger(&mut self, _: Logger) {}
 }
 
@@ -113,6 +117,10 @@ impl Stream for InterceptorStream {
 }
 
 impl LoggerObject for InterceptorStream {
+    fn get_logger(&self) -> Logger {
+        slog::Logger::root(slog_stdlog::StdLog.fuse(), o!())
+    }
+
     fn set_logger(&mut self, _: Logger) {}
 }
 

@@ -23,6 +23,7 @@ mod websocket;
 mod websocket_listener;
 
 pub trait LoggerObject {
+    fn get_logger(&self) -> Logger;
     fn set_logger(&mut self, logger: Logger);
 }
 
